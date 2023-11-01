@@ -217,54 +217,17 @@ macro_rules! impl_Display {
             let mut buf = [MaybeUninit::<u8>::uninit(); 39];
             let mut curr = buf.len();
             let buf_ptr = MaybeUninit::slice_as_mut_ptr(&mut buf);
-            let lut_ptr = DEC_DIGITS_LUT.as_ptr();
 
-            // SAFETY: Since `d1` and `d2` are always less than or equal to `198`, we
-            // can copy from `lut_ptr[d1..d1 + 1]` and `lut_ptr[d2..d2 + 1]`. To show
-            // that it's OK to copy into `buf_ptr`, notice that at the beginning
-            // `curr == buf.len() == 39 > log(n)` since `n < 2^128 < 10^39`, and at
-            // each step this is kept the same as `n` is divided. Since `n` is always
-            // non-negative, this means that `curr > 0` so `buf_ptr[curr..curr + 1]`
-            // is safe to access.
             unsafe {
-                // need at least 16 bits for the 4-characters-at-a-time to work.
-                assert!(crate::mem::size_of::<$u>() >= 2);
-
-                // eagerly decode 4 characters at a time
-                while n >= 10000 {
-                    let rem = (n % 10000) as usize;
-                    n /= 10000;
-
-                    let d1 = (rem / 100) << 1;
-                    let d2 = (rem % 100) << 1;
-                    curr -= 4;
-
-                    // We are allowed to copy to `buf_ptr[curr..curr + 3]` here since
-                    // otherwise `curr < 0`. But then `n` was originally at least `10000^10`
-                    // which is `10^40 > 2^128 > n`.
-                    ptr::copy_nonoverlapping(lut_ptr.add(d1), buf_ptr.add(curr), 2);
-                    ptr::copy_nonoverlapping(lut_ptr.add(d2), buf_ptr.add(curr + 2), 2);
-                }
-
-                // if we reach here numbers are <= 9999, so at most 4 chars long
-                let mut n = n as usize; // possibly reduce 64bit math
-
-                // decode 2 more chars, if > 2 chars
-                if n >= 100 {
-                    let d1 = (n % 100) << 1;
-                    n /= 100;
-                    curr -= 2;
-                    ptr::copy_nonoverlapping(lut_ptr.add(d1), buf_ptr.add(curr), 2);
-                }
-
-                // decode last 1 or 2 chars
-                if n < 10 {
+                if n == 0 {
                     curr -= 1;
-                    *buf_ptr.add(curr) = (n as u8) + b'0';
-                } else {
-                    let d1 = n << 1;
-                    curr -= 2;
-                    ptr::copy_nonoverlapping(lut_ptr.add(d1), buf_ptr.add(curr), 2);
+                    *buf_ptr.add(curr) = b'0';
+                }
+
+                while n > 0 {
+                    curr -= 1;
+                    *buf_ptr.add(curr) = ((n % 10) as u8) + b'0';
+                    n /= 10;
                 }
             }
 
