@@ -219,15 +219,14 @@ macro_rules! impl_Display {
             let buf_ptr = MaybeUninit::slice_as_mut_ptr(&mut buf);
 
             unsafe {
-                if n == 0 {
-                    curr -= 1;
-                    *buf_ptr.add(curr) = b'0';
-                }
-
-                while n > 0 {
+                loop {
                     curr -= 1;
                     *buf_ptr.add(curr) = ((n % 10) as u8) + b'0';
                     n /= 10;
+
+                    if n == 0 {
+                        break;
+                    }    
                 }
             }
 
