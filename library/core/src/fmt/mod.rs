@@ -1,6 +1,7 @@
 //! Utilities for formatting and printing strings.
 
 #![stable(feature = "rust1", since = "1.0.0")]
+#![allow(missing_docs)]
 
 use crate::cell::{Cell, Ref, RefCell, RefMut, SyncUnsafeCell, UnsafeCell};
 use crate::char::{EscapeDebugExtArgs, MAX_LEN_UTF8};
@@ -16,7 +17,7 @@ mod float;
 mod nofloat;
 mod num;
 mod num_buffer;
-mod rt;
+pub mod rt;
 
 #[stable(feature = "fmt_flags_align", since = "1.28.0")]
 #[rustc_diagnostic_item = "Alignment"]
@@ -149,6 +150,12 @@ pub trait Write {
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     fn write_str(&mut self, s: &str) -> Result;
+
+    #[stable(feature = "rust1", since = "1.0.0")]
+    fn write_primitive(&mut self, name: &'static str, value: &[u8]) -> Result {
+        let _ = (name, value);
+        Ok(())
+    }
 
     /// Writes a [`char`] into this writer, returning whether the write succeeded.
     ///
@@ -305,11 +312,13 @@ pub struct FormattingOptions {
     /// ```
     // Note: This could use a special niche type with range 0x8000_0000..=0xfdd0ffff.
     // It's unclear if that's useful, though.
-    flags: u32,
+    pub flags: u32,
     /// Width if width flag (bit 27) above is set. Otherwise, always 0.
-    width: u16,
+    pub width: u16,
     /// Precision if precision flag (bit 28) above is set. Otherwise, always 0.
-    precision: u16,
+    pub precision: u16,
+    /// If true, then no formatting is done and the call is forwarded further
+    pub intern_forward: bool,
 }
 
 // This needs to match with compiler/rustc_ast_lowering/src/format.rs.
@@ -347,6 +356,7 @@ impl FormattingOptions {
             flags: ' ' as u32 | flags::ALIGN_UNKNOWN | flags::ALWAYS_SET,
             width: 0,
             precision: 0,
+            intern_forward: false,
         }
     }
 
@@ -368,9 +378,11 @@ impl FormattingOptions {
         self.flags = self.flags & !(flags::SIGN_PLUS_FLAG | flags::SIGN_MINUS_FLAG) | sign;
         self
     }
-    /// Sets or unsets the `0` flag.
-    ///
-    /// This is used to indicate for integer formats that the padding to width should both be done with a 0 character as well as be sign-aware
+    #[unstable(feature = "formatting_options", issue = "118117")]
+    pub fn intern_forward(&mut self, value: bool) -> &mut Self {
+        self.intern_forward = value;
+        self
+    }
     #[unstable(feature = "formatting_options", issue = "118117")]
     pub fn sign_aware_zero_pad(&mut self, sign_aware_zero_pad: bool) -> &mut Self {
         if sign_aware_zero_pad {
@@ -616,14 +628,14 @@ impl<'a> Formatter<'a> {
 #[derive(Copy, Clone)]
 pub struct Arguments<'a> {
     // Format string pieces to print.
-    pieces: &'a [&'static str],
+    pub pieces: &'a [&'static str],
 
     // Placeholder specs, or `None` if all specs are default (as in "{}{}").
-    fmt: Option<&'a [rt::Placeholder]>,
+    pub fmt: Option<&'a [rt::Placeholder]>,
 
     // Dynamic arguments for interpolation, to be interleaved with string
     // pieces. (Every argument is preceded by a string piece.)
-    args: &'a [rt::Argument<'a>],
+    pub args: &'a [rt::Argument<'a>],
 }
 
 #[doc(hidden)]
@@ -1503,7 +1515,7 @@ unsafe fn run(fmt: &mut Formatter<'_>, arg: &rt::Placeholder, args: &[rt::Argume
         // which guarantees the indexes are always within bounds.
         unsafe { (getcount(args, &arg.width), getcount(args, &arg.precision)) };
 
-    let options = FormattingOptions { flags: arg.flags, width, precision };
+    let options = FormattingOptions { flags: arg.flags, width, precision, intern_forward: false };
 
     // Extract the correct argument
     debug_assert!(arg.position < args.len());
@@ -1915,6 +1927,8 @@ impl<'a> Formatter<'a> {
     pub fn write_fmt(&mut self, fmt: Arguments<'_>) -> Result {
         if let Some(s) = fmt.as_statically_known_str() {
             self.buf.write_str(s)
+        } else if self.options.intern_forward {
+            self.buf.write_fmt(fmt)
         } else {
             write(self.buf, fmt)
         }
@@ -2632,9 +2646,15 @@ impl Write for Formatter<'_> {
         self.buf.write_char(c)
     }
 
+    fn write_primitive(&mut self, name: &'static str, value: &[u8]) -> Result {
+        self.buf.write_primitive(name, value)
+    }
+
     #[inline]
     fn write_fmt(&mut self, args: Arguments<'_>) -> Result {
-        if let Some(s) = args.as_statically_known_str() {
+        if self.options.intern_forward {
+            self.buf.write_fmt(args)
+        } else if let Some(s) = args.as_statically_known_str() {
             self.buf.write_str(s)
         } else {
             write(self.buf, args)

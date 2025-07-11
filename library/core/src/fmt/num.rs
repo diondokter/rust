@@ -211,6 +211,11 @@ macro_rules! impl_Display {
         #[stable(feature = "rust1", since = "1.0.0")]
         impl fmt::Display for $unsigned {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                if f.options.intern_forward {
+                    use crate::fmt::Write;
+                    return f.write_primitive(stringify!($unsigned), &self.to_ne_bytes());
+                }
+
                 #[cfg(not(feature = "optimize_for_size"))]
                 {
                     const MAX_DEC_N: usize = $unsigned::MAX.ilog10() as usize + 1;
@@ -230,6 +235,11 @@ macro_rules! impl_Display {
         #[stable(feature = "rust1", since = "1.0.0")]
         impl fmt::Display for $signed {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                if f.options.intern_forward {
+                    use crate::fmt::Write;
+                    return f.write_primitive(stringify!($signed), &self.to_ne_bytes());
+                }
+
                 #[cfg(not(feature = "optimize_for_size"))]
                 {
                     const MAX_DEC_N: usize = $unsigned::MAX.ilog10() as usize + 1;

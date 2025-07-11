@@ -11,7 +11,7 @@ use crate::hint::unreachable_unchecked;
 use crate::ptr::NonNull;
 
 #[lang = "format_placeholder"]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct Placeholder {
     pub position: usize,
     pub flags: u32,
@@ -22,7 +22,7 @@ pub struct Placeholder {
 /// Used by [width](https://doc.rust-lang.org/std/fmt/#width)
 /// and [precision](https://doc.rust-lang.org/std/fmt/#precision) specifiers.
 #[lang = "format_count"]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum Count {
     /// Specified with a literal number, stores the value
     Is(u16),
@@ -32,8 +32,8 @@ pub enum Count {
     Implied,
 }
 
-#[derive(Copy, Clone)]
-enum ArgumentType<'a> {
+#[derive(Copy, Clone, Debug)]
+pub enum ArgumentType<'a> {
     Placeholder {
         // INVARIANT: `formatter` has type `fn(&T, _) -> _` for some `T`, and `value`
         // was derived from a `&'a T`.
@@ -55,9 +55,9 @@ enum ArgumentType<'a> {
 /// * A count argument contains a count for dynamic formatting parameters like
 ///   precision and width.
 #[lang = "format_argument"]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct Argument<'a> {
-    ty: ArgumentType<'a>,
+    pub ty: ArgumentType<'a>,
 }
 
 macro_rules! argument_new {
