@@ -1130,10 +1130,42 @@ fn return_poll_ready_assign<'tcx>(tcx: TyCtxt<'tcx>, source_info: SourceInfo) ->
     Statement::new(source_info, StatementKind::Assign(Box::new((Place::return_place(), ready_val))))
 }
 
+fn return_poll_pending<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    source_info: SourceInfo,
+    return_type: Ty<'tcx>,
+) -> Statement<'tcx> {
+    // Poll::Pending
+    const ONE: VariantIdx = VariantIdx::from_usize(1);
+
+    let poll_def_id = tcx.require_lang_item(LangItem::Poll, source_info.span);
+    let args = tcx.mk_args(&[return_type.into()]);
+    let (variant_idx, operands) = (ONE, IndexVec::new()); // Poll::Pending
+    let pending_val = make_aggregate_adt(poll_def_id, variant_idx, args, operands);
+
+    Statement::new(
+        source_info,
+        StatementKind::Assign(Box::new((Place::return_place(), pending_val))),
+    )
+}
+
 fn insert_poll_ready_block<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) -> BasicBlock {
     let source_info = SourceInfo::outermost(body.span);
     body.basic_blocks_mut().push(BasicBlockData::new_stmts(
         [return_poll_ready_assign(tcx, source_info)].to_vec(),
+        Some(Terminator { source_info, kind: TerminatorKind::Return }),
+        false,
+    ))
+}
+
+fn insert_poll_pending_block<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &mut Body<'tcx>,
+    return_type: Ty<'tcx>,
+) -> BasicBlock {
+    let source_info = SourceInfo::outermost(body.span);
+    body.basic_blocks_mut().push(BasicBlockData::new_stmts(
+        [return_poll_pending(tcx, source_info, return_type)].to_vec(),
         Some(Terminator { source_info, kind: TerminatorKind::Return }),
         false,
     ))
@@ -1261,7 +1293,7 @@ fn create_coroutine_resume_function<'tcx>(
 
     let mut cases = create_cases(body, &transform, Operation::Resume);
 
-    use rustc_middle::mir::AssertKind::{ResumedAfterPanic, ResumedAfterReturn};
+    use rustc_middle::mir::AssertKind::{ResumedAfterPanic /*ResumedAfterReturn*/};
 
     // Jump to the entry point on the unresumed
     cases.insert(0, (CoroutineArgs::UNRESUMED, START_BLOCK));
@@ -1286,7 +1318,8 @@ fn create_coroutine_resume_function<'tcx>(
                 if tcx.is_async_drop_in_place_coroutine(body.source.def_id()) {
                     insert_poll_ready_block(tcx, body)
                 } else {
-                    insert_panic_block(tcx, body, ResumedAfterReturn(transform.coroutine_kind))
+                    // insert_panic_block(tcx, body, (transform.coroutine_kind))
+                    insert_poll_pending_block(tcx, body, transform.old_ret_ty.clone())
                 }
             }
             CoroutineKind::Desugared(CoroutineDesugaring::AsyncGen, _)
