@@ -1726,7 +1726,14 @@ impl<'tcx> crate::MirPass<'tcx> for StateTransform {
         }
 
         // Create the Coroutine::resume / Future::poll function
-        create_coroutine_resume_function(tcx, transform, body, can_return, can_unwind, has_any_yield);
+        create_coroutine_resume_function(
+            tcx,
+            transform,
+            body,
+            can_return,
+            can_unwind,
+            has_any_yield,
+        );
 
         // Run derefer to fix Derefs that are not in the first place
         deref_finder(tcx, body, false);
