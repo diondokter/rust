@@ -213,6 +213,8 @@ struct TransformVisitor<'tcx> {
     old_yield_ty: Ty<'tcx>,
 
     old_ret_ty: Ty<'tcx>,
+
+    has_any_yield: bool,
 }
 
 impl<'tcx> TransformVisitor<'tcx> {
@@ -452,9 +454,11 @@ impl<'tcx> MutVisitor<'tcx> for TransformVisitor<'tcx> {
                     true,
                     &mut data.statements,
                 );
-                // Return state.
-                let state = VariantIdx::new(CoroutineArgs::RETURNED);
-                data.statements.push(self.set_discr(state, source_info));
+                if self.has_any_yield {
+                    // Return state.
+                    let state = VariantIdx::new(CoroutineArgs::RETURNED);
+                    data.statements.push(self.set_discr(state, source_info));
+                }
                 data.terminator_mut().kind = TerminatorKind::Return;
             }
             TerminatorKind::Yield { ref value, resume, mut resume_arg, drop } => {
@@ -1253,9 +1257,10 @@ fn create_coroutine_resume_function<'tcx>(
     body: &mut Body<'tcx>,
     can_return: bool,
     can_unwind: bool,
+    has_any_yield: bool,
 ) {
     // Poison the coroutine when it unwinds
-    if can_unwind {
+    if can_unwind && has_any_yield {
         generate_poison_block_and_redirect_unwinds_there(&transform, body);
     }
 
@@ -1267,7 +1272,7 @@ fn create_coroutine_resume_function<'tcx>(
     cases.insert(0, (CoroutineArgs::UNRESUMED, START_BLOCK));
 
     // Panic when resumed on the returned or poisoned state
-    if can_unwind {
+    if can_unwind && has_any_yield {
         cases.insert(
             1,
             (
@@ -1277,7 +1282,7 @@ fn create_coroutine_resume_function<'tcx>(
         );
     }
 
-    if can_return {
+    if can_return && has_any_yield {
         let block = match transform.coroutine_kind {
             CoroutineKind::Desugared(CoroutineDesugaring::Async, _)
             | CoroutineKind::Coroutine(_) => {
@@ -1297,8 +1302,10 @@ fn create_coroutine_resume_function<'tcx>(
         cases.insert(1, (CoroutineArgs::RETURNED, block));
     }
 
-    let default_block = insert_term_block(body, TerminatorKind::Unreachable);
-    insert_switch(body, cases, &transform, default_block);
+    if has_any_yield {
+        let default_block = insert_term_block(body, TerminatorKind::Unreachable);
+        insert_switch(body, cases, &transform, default_block);
+    }
 
     match transform.coroutine_kind {
         CoroutineKind::Coroutine(_)
@@ -1472,6 +1479,7 @@ impl<'tcx> crate::MirPass<'tcx> for StateTransform {
             // This only applies to coroutines
             return;
         };
+        // tracing::warn!("Look here! This is a coroutine :)");
         tracing::trace!(def_id = ?body.source.def_id());
 
         let old_ret_ty = body.return_ty();
@@ -1481,6 +1489,12 @@ impl<'tcx> crate::MirPass<'tcx> for StateTransform {
         if let Some(dumper) = MirDumper::new(tcx, "coroutine_before", body) {
             dumper.dump_mir(body);
         }
+
+        let has_any_yield = body
+            .basic_blocks
+            .iter()
+            .any(|bb| matches!(bb.terminator().kind, TerminatorKind::Yield { .. }));
+        // tracing::warn!("Has any yield: {has_any_yield}");
 
         // The first argument is the coroutine type passed by value
         let coroutine_ty = body.local_decls.raw[1].ty;
@@ -1571,6 +1585,10 @@ impl<'tcx> crate::MirPass<'tcx> for StateTransform {
         let new_ret_local = body.local_decls.push(LocalDecl::new(new_ret_ty, body.span));
         tracing::trace!(?new_ret_local);
 
+        if let Some(dumper) = MirDumper::new(tcx, "coroutine_custom_0", body) {
+            dumper.dump_mir(body);
+        }
+
         // Run the transformation which converts Places from Local to coroutine struct
         // accesses for locals in `remap`.
         // It also rewrites `return x` and `yield y` as writing a new coroutine state and returning
@@ -1587,11 +1605,20 @@ impl<'tcx> crate::MirPass<'tcx> for StateTransform {
             new_ret_local,
             old_ret_ty,
             old_yield_ty,
+            has_any_yield,
         };
         transform.visit_body(body);
 
+        if let Some(dumper) = MirDumper::new(tcx, "coroutine_custom_2", body) {
+            dumper.dump_mir(body);
+        }
+
         // Swap the actual `RETURN_PLACE` and the provisional `new_ret_local`.
         transform.replace_local(RETURN_PLACE, new_ret_local, body);
+
+        if let Some(dumper) = MirDumper::new(tcx, "coroutine_custom_3", body) {
+            dumper.dump_mir(body);
+        }
 
         // MIR parameters are not explicitly assigned-to when entering the MIR body.
         // If we want to save their values inside the coroutine state, we need to do so explicitly.
@@ -1608,13 +1635,25 @@ impl<'tcx> crate::MirPass<'tcx> for StateTransform {
             }),
         );
 
+        if let Some(dumper) = MirDumper::new(tcx, "coroutine_custom_4", body) {
+            dumper.dump_mir(body);
+        }
+
         // Update our MIR struct to reflect the changes we've made
         body.arg_count = 2; // self, resume arg
         body.spread_arg = None;
 
+        if let Some(dumper) = MirDumper::new(tcx, "coroutine_custom_5", body) {
+            dumper.dump_mir(body);
+        }
+
         // Remove the context argument within generator bodies.
         if matches!(coroutine_kind, CoroutineKind::Desugared(CoroutineDesugaring::Gen, _)) {
             transform_gen_context(body);
+        }
+
+        if let Some(dumper) = MirDumper::new(tcx, "coroutine_custom_6", body) {
+            dumper.dump_mir(body);
         }
 
         // The original arguments to the function are no longer arguments, mark them as such.
@@ -1624,9 +1663,17 @@ impl<'tcx> crate::MirPass<'tcx> for StateTransform {
             var.argument_index = None;
         }
 
+        if let Some(dumper) = MirDumper::new(tcx, "coroutine_custom_7", body) {
+            dumper.dump_mir(body);
+        }
+
         body.coroutine.as_mut().unwrap().yield_ty = None;
         body.coroutine.as_mut().unwrap().resume_ty = None;
         body.coroutine.as_mut().unwrap().coroutine_layout = Some(layout);
+
+        if let Some(dumper) = MirDumper::new(tcx, "coroutine_custom_8", body) {
+            dumper.dump_mir(body);
+        }
 
         // FIXME: Drops, produced by insert_clean_drop + elaborate_coroutine_drops,
         // are currently sync only. To allow async for them, we need to move those calls
@@ -1637,7 +1684,7 @@ impl<'tcx> crate::MirPass<'tcx> for StateTransform {
         // This is expanded to a drop ladder in `elaborate_coroutine_drops`.
         let drop_clean = insert_clean_drop(tcx, body, has_async_drops);
 
-        if let Some(dumper) = MirDumper::new(tcx, "coroutine_pre-elab", body) {
+        if let Some(dumper) = MirDumper::new(tcx, "coroutine_custom_9", body) {
             dumper.dump_mir(body);
         }
 
@@ -1646,7 +1693,7 @@ impl<'tcx> crate::MirPass<'tcx> for StateTransform {
         // However we need to also elaborate the code generated by `insert_clean_drop`.
         elaborate_coroutine_drops(tcx, body);
 
-        if let Some(dumper) = MirDumper::new(tcx, "coroutine_post-transform", body) {
+        if let Some(dumper) = MirDumper::new(tcx, "coroutine_custom_10", body) {
             dumper.dump_mir(body);
         }
 
@@ -1674,8 +1721,12 @@ impl<'tcx> crate::MirPass<'tcx> for StateTransform {
             body.coroutine.as_mut().unwrap().coroutine_drop_proxy_async = Some(proxy_shim);
         }
 
+        if let Some(dumper) = MirDumper::new(tcx, "coroutine_custom_11", body) {
+            dumper.dump_mir(body);
+        }
+
         // Create the Coroutine::resume / Future::poll function
-        create_coroutine_resume_function(tcx, transform, body, can_return, can_unwind);
+        create_coroutine_resume_function(tcx, transform, body, can_return, can_unwind, has_any_yield);
 
         // Run derefer to fix Derefs that are not in the first place
         deref_finder(tcx, body, false);
