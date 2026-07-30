@@ -875,7 +875,7 @@ fn record_layout_for_printing<'tcx>(cx: &LayoutCx<'tcx>, layout: TyAndLayout<'tc
 
         ty::Coroutine(def_id, args) => {
             debug!("print-type-size t: `{:?}` record coroutine", layout.ty);
-            // Coroutines always have a begin/poisoned/end state with additional suspend points
+            // Coroutines always have hardcoded states with additional suspend points
             let (variant_infos, opt_discr_size) =
                 variant_info_for_coroutine(cx, layout, def_id, args);
             record(DataTypeKind::Coroutine, false, opt_discr_size, variant_infos);
@@ -1068,13 +1068,15 @@ fn variant_info_for_coroutine<'tcx>(
         })
         .collect();
 
-    // The first three variants are hardcoded to be `UNRESUMED`, `RETURNED` and `POISONED`.
-    // We will move the `RETURNED` and `POISONED` elements to the end so we
-    // are left with a sorting order according to the coroutines yield points:
-    // First `Unresumed`, then the `SuspendN` followed by `Returned` and `Panicked` (POISONED).
-    let end_states = variant_infos.drain(1..=2);
-    let end_states: Vec<_> = end_states.collect();
-    variant_infos.extend(end_states);
+    if variant_infos.len() > 1 {
+        // The first three variants are hardcoded to be `UNRESUMED`, `RETURNED` and `POISONED`.
+        // We will move the `RETURNED` and `POISONED` elements to the end so we
+        // are left with a sorting order according to the coroutines yield points:
+        // First `Unresumed`, then the `SuspendN` followed by `Returned` and `Panicked` (POISONED).
+        let end_states = variant_infos.drain(1..=2);
+        let end_states: Vec<_> = end_states.collect();
+        variant_infos.extend(end_states);
+    }
 
     (
         variant_infos,

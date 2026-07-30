@@ -179,22 +179,22 @@ struct TransformVisitor<'tcx> {
     tcx: TyCtxt<'tcx>,
     coroutine_kind: hir::CoroutineKind,
 
-    // The type of the discriminant in the coroutine struct
+    /// The type of the discriminant in the coroutine struct
     discr_ty: Ty<'tcx>,
 
-    // Mapping from Local to (type of local, coroutine struct index)
+    /// Mapping from Local to (type of local, coroutine struct index)
     remap: IndexVec<Local, Option<(Ty<'tcx>, VariantIdx, FieldIdx)>>,
 
-    // A map from a suspension point in a block to the locals which have live storage at that point
+    /// A map from a suspension point in a block to the locals which have live storage at that point
     storage_liveness: IndexVec<BasicBlock, Option<DenseBitSet<Local>>>,
 
-    // A list of suspension points, generated during the transform
+    /// A list of suspension points, generated during the transform
     suspension_points: Vec<SuspensionPoint<'tcx>>,
 
-    // The set of locals that have no `StorageLive`/`StorageDead` annotations.
+    /// The set of locals that have no `StorageLive`/`StorageDead` annotations.
     always_live_locals: DenseBitSet<Local>,
 
-    // New local we just create to hold the `CoroutineState` value.
+    /// New local we just create to hold the `CoroutineState` value.
     new_ret_local: Local,
 
     old_yield_ty: Ty<'tcx>,
@@ -202,6 +202,10 @@ struct TransformVisitor<'tcx> {
     old_ret_ty: Ty<'tcx>,
 
     patch: Option<MirPatch<'tcx>>,
+
+    /// The amount of reserved variants the coroutine contains.
+    /// Normally this is [CoroutineArgs::RESERVED_VARIANTS], but when the coroutine can be optimized, it may be 1
+    num_reserved_variants: usize,
 }
 
 impl<'tcx> TransformVisitor<'tcx> {
@@ -398,6 +402,10 @@ impl<'tcx> TransformVisitor<'tcx> {
             visitor.visit_place(&mut suspension.resume_arg, ctxt, location);
         }
     }
+
+    fn has_optimized_layout(&self) -> bool {
+        self.num_reserved_variants == 1
+    }
 }
 
 impl<'tcx> MutVisitor<'tcx> for TransformVisitor<'tcx> {
@@ -491,9 +499,12 @@ impl<'tcx> MutVisitor<'tcx> for TransformVisitor<'tcx> {
                     true,
                     &mut data.statements,
                 );
-                // Return state.
-                let state = VariantIdx::new(CoroutineArgs::RETURNED);
-                data.statements.push(self.set_discr(state, source_info));
+                if !self.has_optimized_layout() {
+                    // We are not optimizing, so we have to change the state of the coroutine
+                    // Return state.
+                    let state = VariantIdx::new(CoroutineArgs::RETURNED);
+                    data.statements.push(self.set_discr(state, source_info));
+                }
                 data.terminator_mut().kind = TerminatorKind::Return;
             }
             TerminatorKind::Yield { ref value, resume, mut resume_arg, drop } => {
@@ -501,7 +512,7 @@ impl<'tcx> MutVisitor<'tcx> for TransformVisitor<'tcx> {
                 // We must assign the value first in case it gets declared dead below
                 self.make_state(value.clone(), source_info, false, &mut data.statements);
                 // Yield state.
-                let state = CoroutineArgs::RESERVED_VARIANTS + self.suspension_points.len();
+                let state = self.num_reserved_variants + self.suspension_points.len();
 
                 // The resume arg target location might itself be remapped if its base local is
                 // live across a yield.
@@ -872,7 +883,7 @@ fn create_coroutine_resume_function<'tcx>(
     can_unwind: bool,
 ) {
     // Poison the coroutine when it unwinds
-    if can_unwind {
+    if can_unwind && !transform.has_optimized_layout() {
         generate_poison_block_and_redirect_unwinds_there(&transform, body);
     }
 
@@ -884,7 +895,7 @@ fn create_coroutine_resume_function<'tcx>(
     cases.insert(0, (CoroutineArgs::UNRESUMED, START_BLOCK));
 
     // Panic when resumed on the returned or poisoned state
-    if can_unwind {
+    if can_unwind && !transform.has_optimized_layout() {
         cases.insert(
             1,
             (
@@ -894,7 +905,7 @@ fn create_coroutine_resume_function<'tcx>(
         );
     }
 
-    if can_return {
+    if can_return && !transform.has_optimized_layout() {
         let block = match transform.coroutine_kind {
             CoroutineKind::Desugared(CoroutineDesugaring::Async, _)
             | CoroutineKind::Coroutine(_) => {
@@ -914,8 +925,10 @@ fn create_coroutine_resume_function<'tcx>(
         cases.insert(1, (CoroutineArgs::RETURNED, block));
     }
 
-    let default_block = insert_term_block(body, TerminatorKind::Unreachable);
-    insert_switch(body, cases, &transform, default_block);
+    if !transform.has_optimized_layout() {
+        let default_block = insert_term_block(body, TerminatorKind::Unreachable);
+        insert_switch(body, cases, &transform, default_block);
+    }
 
     match transform.coroutine_kind {
         CoroutineKind::Coroutine(_)
@@ -1114,7 +1127,8 @@ impl<'tcx> crate::MirPass<'tcx> for StateTransform {
         // Extract locals which are live across suspension point into `layout`
         // `remap` gives a mapping from local indices onto coroutine struct indices
         // `storage_liveness` tells us which locals have live storage at suspension points
-        let (remap, layout, storage_liveness) = compute_layout(liveness_info, body);
+        let (remap, layout, storage_liveness, num_reserved_variants) =
+            compute_layout(liveness_info, tcx, body);
 
         let can_return = can_return(tcx, body, body.typing_env(tcx));
 
@@ -1140,6 +1154,7 @@ impl<'tcx> crate::MirPass<'tcx> for StateTransform {
             old_ret_ty,
             old_yield_ty,
             patch: Some(MirPatch::new(body)),
+            num_reserved_variants,
         };
         transform.visit_body(body);
 

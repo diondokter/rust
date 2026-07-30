@@ -67,8 +67,6 @@ print-type-size     variant `Pending`: 0 bytes
 print-type-size type: `{async fn body of wait()}`: 1 bytes, alignment: 1 bytes
 print-type-size     discriminant: 1 bytes
 print-type-size     variant `Unresumed`: 0 bytes
-print-type-size     variant `Returned`: 0 bytes
-print-type-size     variant `Panicked`: 0 bytes
 print-type-size type: `std::marker::PhantomData<&str>`: 0 bytes, alignment: 1 bytes
 print-type-size type: `std::marker::PhantomData<*mut ()>`: 0 bytes, alignment: 1 bytes
 print-type-size type: `std::marker::PhantomData<dyn std::any::Any>`: 0 bytes, alignment: 1 bytes

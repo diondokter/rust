@@ -36,6 +36,7 @@ use rustc_mir_dataflow::impls::{
     MaybeBorrowedLocals, MaybeLiveLocals, MaybeRequiresStorage, MaybeStorageLive,
     always_storage_live_locals,
 };
+use rustc_mir_dataflow::move_paths::MoveData;
 use rustc_mir_dataflow::{
     Analysis, Results, ResultsCursor, ResultsVisitor, visit_reachable_results,
 };
@@ -338,14 +339,16 @@ impl StorageConflictVisitor<'_, '_> {
     }
 }
 
-#[tracing::instrument(level = "trace", skip(liveness, body))]
+#[tracing::instrument(level = "trace", skip(liveness, tcx, body))]
 pub(super) fn compute_layout<'tcx>(
     liveness: LivenessInfo,
+    tcx: TyCtxt<'tcx>,
     body: &Body<'tcx>,
 ) -> (
     IndexVec<Local, Option<(Ty<'tcx>, VariantIdx, FieldIdx)>>,
     CoroutineLayout<'tcx>,
     IndexVec<BasicBlock, Option<DenseBitSet<Local>>>,
+    usize,
 ) {
     let LivenessInfo {
         saved_locals,
@@ -354,6 +357,39 @@ pub(super) fn compute_layout<'tcx>(
         storage_conflicts,
         storage_liveness,
     } = liveness;
+
+    // We need to decide whether to optimize the layout. Some coroutines aren't really coroutines because they
+    // just immediately return a value. In that case we can forego the normal state machine and just execute on poll.
+
+    // If there are cleanup blocks, that means data is transformend non-trivially and we must not optimize
+    let has_cleanup = body.basic_blocks.iter().any(|bb| bb.is_cleanup);
+
+    // We must not optimize async drop
+    let is_async_drop = {
+        let root_def_id = tcx.typeck_root_def_id(body.source.def_id());
+        tcx.is_lang_item(root_def_id, rustc_hir::LangItem::AsyncDropInPlace)
+            || tcx.is_lang_item(root_def_id, rustc_hir::LangItem::AsyncDrop)
+    };
+
+    // If any of the upvars are moved, we cannot use the optimization or polling twice would cause UB
+    let data_moves = {
+        let move_data = MoveData::gather_moves(body, tcx, |_| true);
+
+        move_data
+            .moves
+            .iter()
+            .map(|move_out| &move_data.move_paths[move_out.path])
+            .any(|move_path| move_path.place.local == Local::arg(0))
+    };
+
+    let num_suspension_points = live_locals_at_suspension_points.len();
+    let num_reserved_variants =
+        if num_suspension_points == 0 && !has_cleanup && !data_moves && !is_async_drop {
+            1 // Optimization: Only have the UNRESUMED variant when there's no suspension points
+        } else {
+            CoroutineArgs::RESERVED_VARIANTS
+        };
+    let num_variants = num_reserved_variants + num_suspension_points;
 
     // Gather live local types.
     let mut tys: IndexVec<CoroutineSavedLocal, CoroutineSavedTy<'_>> = saved_locals
@@ -393,29 +429,30 @@ pub(super) fn compute_layout<'tcx>(
     // In debuginfo, these will correspond to the beginning (UNRESUMED) or end
     // (RETURNED, POISONED) of the function.
     let body_span = body.source_scopes[OUTERMOST_SOURCE_SCOPE].span;
-    let mut variant_source_info: IndexVec<VariantIdx, SourceInfo> = IndexVec::with_capacity(
-        CoroutineArgs::RESERVED_VARIANTS + live_locals_at_suspension_points.len(),
+    let mut variant_source_info: IndexVec<VariantIdx, SourceInfo> =
+        IndexVec::with_capacity(num_variants);
+    variant_source_info.extend(
+        [
+            SourceInfo::outermost(body_span.shrink_to_lo()),
+            SourceInfo::outermost(body_span.shrink_to_hi()),
+            SourceInfo::outermost(body_span.shrink_to_hi()),
+        ]
+        .into_iter()
+        .take(num_reserved_variants),
     );
-    variant_source_info.extend([
-        SourceInfo::outermost(body_span.shrink_to_lo()),
-        SourceInfo::outermost(body_span.shrink_to_hi()),
-        SourceInfo::outermost(body_span.shrink_to_hi()),
-    ]);
 
     // Simple map from new to old indices to avoid repeatedly counting bits.
     let reverse_local_map: IndexVec<CoroutineSavedLocal, Local> = saved_locals.iter().collect();
 
     // Build the coroutine variant field list.
     // Create a map from local indices to coroutine struct indices.
-    let mut variant_fields: IndexVec<VariantIdx, _> = IndexVec::from_elem_n(
-        IndexVec::new(),
-        CoroutineArgs::RESERVED_VARIANTS + live_locals_at_suspension_points.len(),
-    );
+    let mut variant_fields: IndexVec<VariantIdx, _> =
+        IndexVec::from_elem_n(IndexVec::new(), num_variants);
     let mut remap = IndexVec::from_elem_n(None, saved_locals.domain_size());
     for (live_locals, &source_info_at_suspension_point, (variant_index, fields)) in izip!(
         &live_locals_at_suspension_points,
         &source_info_at_suspension_points,
-        variant_fields.iter_enumerated_mut().skip(CoroutineArgs::RESERVED_VARIANTS)
+        variant_fields.iter_enumerated_mut().skip(num_reserved_variants)
     ) {
         *fields = live_locals.iter().collect();
         for (idx, &saved_local) in fields.iter_enumerated() {
@@ -447,7 +484,7 @@ pub(super) fn compute_layout<'tcx>(
     debug!(?layout);
     debug!(?storage_liveness);
 
-    (remap, layout, storage_liveness)
+    (remap, layout, storage_liveness, num_reserved_variants)
 }
 
 #[instrument(level = "debug", skip(tcx), ret)]
@@ -476,7 +513,7 @@ pub(crate) fn mir_coroutine_witnesses<'tcx>(
     // Extract locals which are live across suspension point into `layout`
     // `remap` gives a mapping from local indices onto coroutine struct indices
     // `storage_liveness` tells us which locals have live storage at suspension points
-    let (_, coroutine_layout, _) = compute_layout(liveness_info, body);
+    let (_, coroutine_layout, _, _) = compute_layout(liveness_info, tcx, body);
 
     check_suspend_tys(tcx, &coroutine_layout, body);
     check_field_tys_sized(tcx, &coroutine_layout, def_id);

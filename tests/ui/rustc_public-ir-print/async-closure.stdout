@@ -40,34 +40,22 @@ fn foo::{closure#0}::{closure#0}(_1: Pin<&mut {async closure body@$DIR/async-clo
     let  _3: i32;
     let mut _4: &i32;
     let mut _5: ();
-    let mut _6: u32;
-    let mut _7: &mut {async closure body@$DIR/async-closure.rs:9:22: 11:6};
-    let mut _8: std::future::ResumeTy;
-    let mut _9: NonNull<Context<'_>>;
-    debug _task_context => _8;
-    debug y => (*((*_7).0: &i32));
+    let mut _6: &mut {async closure body@$DIR/async-closure.rs:9:22: 11:6};
+    let mut _7: std::future::ResumeTy;
+    let mut _8: NonNull<Context<'_>>;
+    debug _task_context => _7;
+    debug y => (*((*_6).0: &i32));
     debug y => _3;
     bb0: {
-        _9 = move _2 as NonNull<Context<'_>>;
-        _8 = ResumeTy(move _9);
-        _7 = (_1.0: &mut {async closure body@$DIR/async-closure.rs:9:22: 11:6});
-        _6 = discriminant((*_7));
-        switchInt(move _6) -> [0: bb3, 1: bb1, otherwise: bb2];
-    }
-    bb1: {
-        assert(false, `async fn` resumed after completion) -> [success: bb1, unwind unreachable];
-    }
-    bb2: {
-        unreachable;
-    }
-    bb3: {
+        _8 = move _2 as NonNull<Context<'_>>;
+        _7 = ResumeTy(move _8);
+        _6 = (_1.0: &mut {async closure body@$DIR/async-closure.rs:9:22: 11:6});
         StorageLive(_3);
-        _4 = no_retag ((*_7).0: &i32);
+        _4 = no_retag ((*_6).0: &i32);
         _3 = (*_4);
         _5 = ();
         StorageDead(_3);
         _0 = Poll::Ready(move _5);
-        discriminant((*_7)) = 1;
         return;
     }
 }
@@ -76,34 +64,22 @@ fn foo::{closure#0}::{synthetic#0}(_1: Pin<&mut {async closure body@$DIR/async-c
     let  _3: i32;
     let mut _4: &i32;
     let mut _5: ();
-    let mut _6: u32;
-    let mut _7: &mut {async closure body@$DIR/async-closure.rs:9:22: 11:6};
-    let mut _8: std::future::ResumeTy;
-    let mut _9: NonNull<Context<'_>>;
-    debug _task_context => _8;
-    debug y => (*((*_7).0: &i32));
+    let mut _6: &mut {async closure body@$DIR/async-closure.rs:9:22: 11:6};
+    let mut _7: std::future::ResumeTy;
+    let mut _8: NonNull<Context<'_>>;
+    debug _task_context => _7;
+    debug y => (*((*_6).0: &i32));
     debug y => _3;
     bb0: {
-        _9 = move _2 as NonNull<Context<'_>>;
-        _8 = ResumeTy(move _9);
-        _7 = (_1.0: &mut {async closure body@$DIR/async-closure.rs:9:22: 11:6});
-        _6 = discriminant((*_7));
-        switchInt(move _6) -> [0: bb3, 1: bb1, otherwise: bb2];
-    }
-    bb1: {
-        assert(false, `async fn` resumed after completion) -> [success: bb1, unwind unreachable];
-    }
-    bb2: {
-        unreachable;
-    }
-    bb3: {
+        _8 = move _2 as NonNull<Context<'_>>;
+        _7 = ResumeTy(move _8);
+        _6 = (_1.0: &mut {async closure body@$DIR/async-closure.rs:9:22: 11:6});
         StorageLive(_3);
-        _4 = no_retag ((*_7).0: &i32);
+        _4 = no_retag ((*_6).0: &i32);
         _3 = (*_4);
         _5 = ();
         StorageDead(_3);
         _0 = Poll::Ready(move _5);
-        discriminant((*_7)) = 1;
         return;
     }
 }
