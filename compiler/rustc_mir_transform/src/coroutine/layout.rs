@@ -361,9 +361,6 @@ pub(super) fn compute_layout<'tcx>(
     // We need to decide whether to optimize the layout. Some coroutines aren't really coroutines because they
     // just immediately return a value. In that case we can forego the normal state machine and just execute on poll.
 
-    // If there are cleanup blocks, that means data is transformend non-trivially and we must not optimize
-    let has_cleanup = body.basic_blocks.iter().any(|bb| bb.is_cleanup);
-
     // We must not optimize async drop
     let is_async_drop = {
         let root_def_id = tcx.typeck_root_def_id(body.source.def_id());
@@ -383,12 +380,14 @@ pub(super) fn compute_layout<'tcx>(
     };
 
     let num_suspension_points = live_locals_at_suspension_points.len();
-    let num_reserved_variants =
-        if num_suspension_points == 0 && !has_cleanup && !data_moves && !is_async_drop {
-            1 // Optimization: Only have the UNRESUMED variant when there's no suspension points
-        } else {
-            CoroutineArgs::RESERVED_VARIANTS
-        };
+
+    let optimize_layout = num_suspension_points == 0 && !data_moves && !is_async_drop;
+
+    let num_reserved_variants = if optimize_layout {
+        1 // Optimization: Only have the UNRESUMED variant when there's no suspension points
+    } else {
+        CoroutineArgs::RESERVED_VARIANTS
+    };
     let num_variants = num_reserved_variants + num_suspension_points;
 
     // Gather live local types.

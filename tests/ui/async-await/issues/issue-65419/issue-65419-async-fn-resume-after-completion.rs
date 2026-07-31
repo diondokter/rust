@@ -9,6 +9,7 @@
 #![feature(coroutines, coroutine_trait)]
 
 async fn foo() {
+    core::future::ready(()).await
 }
 
 fn main() {

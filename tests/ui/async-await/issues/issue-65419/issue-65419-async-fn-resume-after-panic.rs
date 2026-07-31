@@ -12,6 +12,7 @@
 use std::panic;
 
 async fn foo() {
+    std::future::ready(()).await;
     panic!();
 }
 

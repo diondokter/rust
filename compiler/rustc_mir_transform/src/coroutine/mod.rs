@@ -1130,6 +1130,20 @@ impl<'tcx> crate::MirPass<'tcx> for StateTransform {
         let (remap, layout, storage_liveness, num_reserved_variants) =
             compute_layout(liveness_info, tcx, body);
 
+        if num_reserved_variants == 1 {
+            // Layout is optimized, which means that we only have the unresumed state.
+            // That means the drop glue will always drop every captured variable.
+            // We have to change the MIR so it's not done in the normal flow anymore.
+            for bb in body.basic_blocks_mut() {
+                let Some(terminator) = bb.terminator.as_mut() else { continue };
+                if let TerminatorKind::Drop { place, target, .. } = terminator.kind.clone()
+                    && place == Place::from(Local::arg(0))
+                {
+                    terminator.kind = TerminatorKind::Goto { target };
+                }
+            }
+        }
+
         let can_return = can_return(tcx, body, body.typing_env(tcx));
 
         // We rename RETURN_PLACE which has type mir.return_ty to new_ret_local
