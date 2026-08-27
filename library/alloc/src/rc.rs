@@ -342,9 +342,9 @@ impl<T: ?Sized, A: Allocator> !Send for Rc<T, A> {}
 impl<T: ?Sized, A: Allocator> !Sync for Rc<T, A> {}
 
 #[stable(feature = "catch_unwind", since = "1.9.0")]
-impl<T: RefUnwindSafe + ?Sized, A: Allocator + UnwindSafe> UnwindSafe for Rc<T, A> {}
+impl<T: RefUnwindSafe + ?Sized, A: Allocator + UnwindSafe + RefUnwindSafe> UnwindSafe for Rc<T, A> {}
 #[stable(feature = "rc_ref_unwind_safe", since = "1.58.0")]
-impl<T: RefUnwindSafe + ?Sized, A: Allocator + UnwindSafe> RefUnwindSafe for Rc<T, A> {}
+impl<T: RefUnwindSafe + ?Sized, A: Allocator + RefUnwindSafe> RefUnwindSafe for Rc<T, A> {}
 
 #[unstable(feature = "coerce_unsized", issue = "18598")]
 impl<T: ?Sized + Unsize<U>, U: ?Sized, A: Allocator> CoerceUnsized<Rc<U, A>> for Rc<T, A> {}
@@ -650,93 +650,6 @@ impl<T> Rc<T> {
     #[must_use]
     pub fn pin(value: T) -> Pin<Rc<T>> {
         unsafe { Pin::new_unchecked(Rc::new(value)) }
-    }
-
-    /// Maps the value in an `Rc`, reusing the allocation if possible.
-    ///
-    /// `f` is called on a reference to the value in the `Rc`, and the result is returned, also in
-    /// an `Rc`.
-    ///
-    /// Note: this is an associated function, which means that you have
-    /// to call it as `Rc::map(r, f)` instead of `r.map(f)`. This
-    /// is so that there is no conflict with a method on the inner type.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// #![feature(smart_pointer_try_map)]
-    ///
-    /// use std::rc::Rc;
-    ///
-    /// let r = Rc::new(7);
-    /// let new = Rc::map(r, |i| i + 7);
-    /// assert_eq!(*new, 14);
-    /// ```
-    #[cfg(not(no_global_oom_handling))]
-    #[unstable(feature = "smart_pointer_try_map", issue = "144419")]
-    pub fn map<U>(this: Self, f: impl FnOnce(&T) -> U) -> Rc<U> {
-        if size_of::<T>() == size_of::<U>()
-            && align_of::<T>() == align_of::<U>()
-            && Rc::is_unique(&this)
-        {
-            unsafe {
-                let ptr = Rc::into_raw(this);
-                let value = ptr.read();
-                let mut allocation = Rc::from_raw(ptr.cast::<mem::MaybeUninit<U>>());
-
-                Rc::get_mut_unchecked(&mut allocation).write(f(&value));
-                allocation.assume_init()
-            }
-        } else {
-            Rc::new(f(&*this))
-        }
-    }
-
-    /// Attempts to map the value in an `Rc`, reusing the allocation if possible.
-    ///
-    /// `f` is called on a reference to the value in the `Rc`, and if the operation succeeds, the
-    /// result is returned, also in an `Rc`.
-    ///
-    /// Note: this is an associated function, which means that you have
-    /// to call it as `Rc::try_map(r, f)` instead of `r.try_map(f)`. This
-    /// is so that there is no conflict with a method on the inner type.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// #![feature(smart_pointer_try_map)]
-    ///
-    /// use std::rc::Rc;
-    ///
-    /// let b = Rc::new(7);
-    /// let new = Rc::try_map(b, |&i| u32::try_from(i)).unwrap();
-    /// assert_eq!(*new, 7);
-    /// ```
-    #[cfg(not(no_global_oom_handling))]
-    #[unstable(feature = "smart_pointer_try_map", issue = "144419")]
-    pub fn try_map<R>(
-        this: Self,
-        f: impl FnOnce(&T) -> R,
-    ) -> <R::Residual as Residual<Rc<R::Output>>>::TryType
-    where
-        R: Try,
-        R::Residual: Residual<Rc<R::Output>>,
-    {
-        if size_of::<T>() == size_of::<R::Output>()
-            && align_of::<T>() == align_of::<R::Output>()
-            && Rc::is_unique(&this)
-        {
-            unsafe {
-                let ptr = Rc::into_raw(this);
-                let value = ptr.read();
-                let mut allocation = Rc::from_raw(ptr.cast::<mem::MaybeUninit<R::Output>>());
-
-                Rc::get_mut_unchecked(&mut allocation).write(f(&value)?);
-                try { allocation.assume_init() }
-            }
-        } else {
-            try { Rc::new(f(&*this)?) }
-        }
     }
 }
 
@@ -1107,6 +1020,102 @@ impl<T, A: Allocator> Rc<T, A> {
     pub fn into_inner(this: Self) -> Option<T> {
         Rc::try_unwrap(this).ok()
     }
+
+    /// Maps the value in an `Rc`, reusing the allocation if possible.
+    ///
+    /// `f` is called on a reference to the value in the `Rc`, and the result is returned, also in
+    /// an `Rc`.
+    ///
+    /// Note: this is an associated function, which means that you have
+    /// to call it as `Rc::map(r, f)` instead of `r.map(f)`. This
+    /// is so that there is no conflict with a method on the inner type.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #![feature(smart_pointer_try_map)]
+    ///
+    /// use std::rc::Rc;
+    ///
+    /// let r = Rc::new(7);
+    /// let new = Rc::map(r, |i| i + 7);
+    /// assert_eq!(*new, 14);
+    /// ```
+    #[cfg(not(no_global_oom_handling))]
+    #[unstable(feature = "smart_pointer_try_map", issue = "144419")]
+    pub fn map<U>(this: Self, f: impl FnOnce(&T) -> U) -> Rc<U, A> {
+        if size_of::<T>() == size_of::<U>()
+            && align_of::<T>() == align_of::<U>()
+            && Rc::is_unique(&this)
+        {
+            unsafe {
+                let (ptr, alloc) = Rc::into_raw_with_allocator(this);
+                let value = ptr.read();
+                let mut allocation = Rc::from_raw_in(ptr.cast::<mem::MaybeUninit<U>>(), alloc);
+
+                Rc::get_mut_unchecked(&mut allocation).write(f(&value));
+                allocation.assume_init()
+            }
+        } else {
+            let output = f(&*this);
+            let (ptr, alloc) = Rc::into_raw_with_allocator(this);
+            unsafe { Rc::decrement_strong_count_in(ptr, &alloc) }
+
+            Rc::new_in(output, alloc)
+        }
+    }
+
+    /// Attempts to map the value in an `Rc`, reusing the allocation if possible.
+    ///
+    /// `f` is called on a reference to the value in the `Rc`, and if the operation succeeds, the
+    /// result is returned, also in an `Rc`.
+    ///
+    /// Note: this is an associated function, which means that you have
+    /// to call it as `Rc::try_map(r, f)` instead of `r.try_map(f)`. This
+    /// is so that there is no conflict with a method on the inner type.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #![feature(smart_pointer_try_map)]
+    ///
+    /// use std::rc::Rc;
+    ///
+    /// let b = Rc::new(7);
+    /// let new = Rc::try_map(b, |&i| u32::try_from(i)).unwrap();
+    /// assert_eq!(*new, 7);
+    /// ```
+    #[cfg(not(no_global_oom_handling))]
+    #[unstable(feature = "smart_pointer_try_map", issue = "144419")]
+    pub fn try_map<R>(
+        this: Self,
+        f: impl FnOnce(&T) -> R,
+    ) -> <R::Residual as Residual<Rc<R::Output, A>>>::TryType
+    where
+        R: Try,
+        R::Residual: Residual<Rc<R::Output, A>>,
+    {
+        if size_of::<T>() == size_of::<R::Output>()
+            && align_of::<T>() == align_of::<R::Output>()
+            && Rc::is_unique(&this)
+        {
+            unsafe {
+                let (ptr, alloc) = Rc::into_raw_with_allocator(this);
+                let value = ptr.read();
+                let mut allocation =
+                    Rc::from_raw_in(ptr.cast::<mem::MaybeUninit<R::Output>>(), alloc);
+
+                Rc::get_mut_unchecked(&mut allocation).write(f(&value)?);
+                try { allocation.assume_init() }
+            }
+        } else {
+            let output = f(&*this)?;
+            let (ptr, alloc) = Rc::into_raw_with_allocator(this);
+            unsafe { Rc::decrement_strong_count_in(ptr, &alloc) }
+
+            try { Rc::new_in(output, alloc) }
+        }
+    }
 }
 
 impl<T> Rc<[T]> {
@@ -1257,7 +1266,6 @@ impl<T, A: Allocator> Rc<[T], A> {
     /// ```
     #[unstable(feature = "alloc_slice_into_array", issue = "148082")]
     #[inline]
-    #[must_use]
     pub fn into_array<const N: usize>(self) -> Result<Rc<[T; N], A>, Self> {
         if self.len() == N {
             let (ptr, alloc) = Self::into_raw_with_allocator(self);
@@ -1605,6 +1613,46 @@ impl<T: ?Sized> Rc<T> {
     #[stable(feature = "rc_mutate_strong_count", since = "1.53.0")]
     pub unsafe fn decrement_strong_count(ptr: *const T) {
         unsafe { Self::decrement_strong_count_in(ptr, Global) }
+    }
+
+    /// Gets the number of strong (`Rc`) pointers to the allocation behind the given raw pointer.
+    ///
+    /// This method does not consume or drop the `Rc` behind this pointer.
+    ///
+    /// # Safety
+    ///
+    /// The pointer must point to (and have valid metadata for) the value inside a live `Rc`
+    /// allocation, such as a pointer returned by [`Rc::into_raw`],
+    /// [`Rc::into_raw_with_allocator`], or [`Rc::as_ptr`].
+    /// `T` must have the same alignment as that value.
+    /// The associated `Rc` instance must be valid (i.e. the strong count must be at
+    /// least 1) for the duration of this method.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #![feature(arc_raw_get_strong)]
+    /// use std::rc::Rc;
+    ///
+    /// let five = Rc::new(5);
+    /// let _also_five = Rc::clone(&five);
+    /// let ptr = Rc::into_raw(five);
+    ///
+    /// unsafe {
+    ///     assert_eq!(2, Rc::strong_count_from_raw(ptr));
+    ///
+    ///     // Convert back to an `Rc` to avoid leaking memory.
+    ///     let five = Rc::from_raw(ptr);
+    ///     assert_eq!(2, Rc::strong_count(&five));
+    /// }
+    /// ```
+    #[inline]
+    #[unstable(feature = "arc_raw_get_strong", issue = "157021")]
+    pub unsafe fn strong_count_from_raw(ptr: *const T) -> usize {
+        let offset = unsafe { data_offset(ptr) };
+        // Reverse the offset to find the original RcInner.
+        let rc_ptr = unsafe { ptr.byte_sub(offset) as *mut RcInner<T> };
+        unsafe { (*rc_ptr).strong.get() }
     }
 }
 
@@ -3002,7 +3050,7 @@ impl<T: ?Sized, A: Allocator> From<Box<T, A>> for Rc<T, A> {
 
 #[cfg(not(no_global_oom_handling))]
 #[stable(feature = "shared_from_slice", since = "1.21.0")]
-impl<T, A: Allocator> From<Vec<T, A>> for Rc<[T], A> {
+impl<T, A: AllocatorClone> From<Vec<T, A>> for Rc<[T], A> {
     /// Allocates a reference-counted slice and moves `v`'s items into it.
     ///
     /// # Example
@@ -3016,7 +3064,7 @@ impl<T, A: Allocator> From<Vec<T, A>> for Rc<[T], A> {
     #[inline]
     fn from(v: Vec<T, A>) -> Rc<[T], A> {
         unsafe {
-            let (vec_ptr, len, cap, alloc) = v.into_raw_parts_with_alloc();
+            let (vec_ptr, len, cap, alloc) = v.into_raw_parts_with_allocator();
 
             let rc_ptr = Self::allocate_for_slice_in(len, &alloc);
             ptr::copy_nonoverlapping(vec_ptr, (&raw mut (*rc_ptr).value) as *mut T, len);

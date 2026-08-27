@@ -33,13 +33,14 @@ use crate::core::config::toml::target::DefaultLinuxLinkerOverride;
 use crate::core::config::{
     Allocator, CompilerBuiltins, DebuginfoLevel, LlvmLibunwind, RustcLto, TargetSelection,
 };
+use crate::core::session::{CLang, DependencyType, FileType, GitRepo, Mode};
 use crate::utils::build_stamp;
 use crate::utils::build_stamp::BuildStamp;
 use crate::utils::exec::command;
 use crate::utils::helpers::{
     self, exe, get_clang_cl_resource_dir, is_debug_info, is_dylib, symlink_dir, t, up_to_date,
 };
-use crate::{CLang, DependencyType, FileType, GitRepo, Mode, debug, trace};
+use crate::{debug, trace};
 
 /// Build a standard library for the given `target` using the given `build_compiler`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -299,7 +300,7 @@ impl CommandLineStep for Std {
             if self.is_for_mir_opt_tests {
                 ArtifactKeepMode::OnlyRmeta
             } else {
-                // We use -Zno-embed-metadata for the standard library
+                // We use -Zembed-metadata=no for the standard library
                 ArtifactKeepMode::BothRlibAndRmeta
             },
         );
@@ -776,8 +777,7 @@ impl Step for StdLink {
         };
 
         let is_downloaded_beta_stage0 = builder
-            .build
-            .config
+            .sess
             .initial_rustc
             .starts_with(builder.out.join(compiler.host).join("stage0/bin"));
 
@@ -1146,7 +1146,7 @@ impl CommandLineStep for Rustc {
             cargo.arg("-p").arg(krate);
         }
 
-        if builder.build.config.enable_bolt_settings && build_compiler.stage == 1 {
+        if builder.sess.config.enable_bolt_settings && build_compiler.stage == 1 {
             // Relocations are required for BOLT to work.
             cargo.env("RUSTC_BOLT_LINK_FLAGS", "1");
         }
@@ -1173,13 +1173,15 @@ impl CommandLineStep for Rustc {
                 {
                     // jemalloc_sys and rustc_public_bridge are not linked into librustc_driver.so,
                     // so we need to distribute them as rlib to be able to use them.
-                    filename.ends_with(".rlib")
-                } else {
-                    // Distribute the rest of the rustc crates as rmeta files only to reduce
-                    // the tarball sizes by about 50%. The object files are linked into
-                    // librustc_driver.so, so it is still possible to link against them.
-                    filename.ends_with(".rmeta")
+                    if filename.ends_with(".rlib") {
+                        return true;
+                    }
                 }
+
+                // Distribute the rest of the rustc crates as rmeta files only to reduce
+                // the tarball sizes by about 50%. The object files are linked into
+                // librustc_driver.so, so it is still possible to link against them.
+                filename.ends_with(".rmeta")
             })),
         );
 
@@ -1253,7 +1255,7 @@ pub fn rustc_cargo(
     // us a faster startup time. However GNU ld < 2.40 will error if we try to link a shared object
     // with direct references to protected symbols, so for now we only use protected symbols if
     // linking with LLD is enabled.
-    if builder.build.config.bootstrap_override_lld.is_used() {
+    if builder.sess.config.bootstrap_override_lld.is_used() {
         cargo.rustflag("-Zdefault-visibility=protected");
     }
 
@@ -1373,8 +1375,9 @@ pub fn rustc_cargo_env(builder: &Builder<'_>, cargo: &mut Cargo, target: TargetS
 
     let nightly = builder.config.channel == "nightly" || builder.config.channel == "dev";
     if nightly {
-        // We want to enable Polonius Alpha by default on nighty
+        // We want to enable Polonius Alpha and Next Trait Solver by default on nighty
         cargo.env("CFG_DEFAULT_POLONIUS_NEXT", "1");
+        cargo.env("CFG_DEFAULT_NEXT_SOLVER_GLOBALLY", "1");
     }
 
     // These conditionals represent a tension between three forces:
@@ -1391,7 +1394,7 @@ pub fn rustc_cargo_env(builder: &Builder<'_>, cargo: &mut Cargo, target: TargetS
     if builder.config.llvm_enabled(target) {
         let building_llvm_is_expensive = prebuilt_llvm_output(builder, target).is_none();
 
-        let skip_llvm = (builder.kind == Kind::Check) && building_llvm_is_expensive;
+        let skip_llvm = (cargo.kind() == Kind::Check) && building_llvm_is_expensive;
         if !skip_llvm {
             rustc_llvm_env(builder, cargo, target)
         }
@@ -1431,7 +1434,8 @@ fn rustc_llvm_env(builder: &Builder<'_>, cargo: &mut Cargo, target: TargetSelect
         cargo.env("LLVM_OFFLOAD", "1");
     }
 
-    cargo.env("LLVM_CONFIG", &llvm_output.host_llvm_config);
+    // This always has to be the host LLVM config, because it is executed by rustc_llvm
+    cargo.env("LLVM_CONFIG", builder.host_llvm_config());
 
     // Some LLVM linker flags (-L and -l) may be needed to link `rustc_llvm`. Its build script
     // expects these to be passed via the `LLVM_LINKER_FLAGS` env variable, separated by
@@ -1717,7 +1721,7 @@ impl CommandLineStep for GccCodegenBackend {
 
         let _guard =
             builder.msg(Kind::Build, "codegen backend gcc", Mode::Codegen, build_compiler, host);
-        let files = run_cargo(builder, cargo, vec![], &stamp, vec![], ArtifactKeepMode::OnlyRlib);
+        let files = run_cargo(builder, cargo, vec![], &stamp, vec![], ArtifactKeepMode::OnlyDylib);
 
         GccCodegenBackendOutput {
             stamp: write_codegen_backend_stamp(stamp, files, builder.config.dry_run()),
@@ -1793,7 +1797,7 @@ impl CommandLineStep for CraneliftCodegenBackend {
             build_compiler,
             target,
         );
-        let files = run_cargo(builder, cargo, vec![], &stamp, vec![], ArtifactKeepMode::OnlyRlib);
+        let files = run_cargo(builder, cargo, vec![], &stamp, vec![], ArtifactKeepMode::OnlyDylib);
         write_codegen_backend_stamp(stamp, files, builder.config.dry_run())
     }
 
@@ -2126,7 +2130,8 @@ impl CommandLineStep for Assemble {
             if !builder.config.dry_run() && builder.config.llvm_tools_enabled {
                 trace!("LLVM tools enabled");
 
-                let host_llvm_bin_dir = command(&llvm_output.host_llvm_config)
+                let host_llvm = builder.ensure(llvm::Llvm { target: builder.host_target });
+                let host_llvm_bin_dir = command(host_llvm.llvm_config())
                     .arg("--bindir")
                     .cached()
                     .run_capture_stdout(builder)
@@ -2149,10 +2154,10 @@ impl CommandLineStep for Assemble {
                         // where the LLVM config is located
                         external_llvm_config.parent().unwrap().to_path_buf()
                     } else {
-                        // If we have built LLVM locally, then take the path of the host bindir
+                        // If not, then take the path of the host bindir of the host LLVM,
                         // relative to its output build directory, and then apply it to the target
                         // LLVM output build directory.
-                        let host_llvm_out = builder.llvm_out(builder.host_target);
+                        let host_llvm_out = host_llvm.root_dir();
                         let target_llvm_out = llvm_output.root_dir();
                         if let Ok(relative_path) =
                             Path::new(&host_llvm_bin_dir).strip_prefix(host_llvm_out)
@@ -2281,7 +2286,7 @@ impl CommandLineStep for Assemble {
 
         if builder.config.llvm_offload && !builder.config.dry_run() {
             debug!("`llvm_offload` requested");
-            if let Some(_llvm_config) = builder.llvm_config(builder.config.host_target) {
+            if builder.is_llvm_enabled_for(builder.config.host_target) {
                 let rust_offload =
                     builder.ensure(llvm::RustOffload { target: build_compiler.host });
                 let target_libdir =
@@ -2354,14 +2359,9 @@ impl CommandLineStep for Assemble {
             let is_proc_macro = proc_macros.contains(&filename);
             let is_dylib_or_debug = is_dylib(&f.path()) || is_debug_info(&filename);
 
-            // If we link statically to stdlib, do not copy the libstd dynamic library file
+            // `rustc_driver` statically links to stdlib, so do not copy the libstd dynamic library file
             let can_be_rustc_dynamic_dep =
-                if builder.link_std_into_rustc_driver(target_compiler.host) {
-                    let is_std = filename.starts_with("std-") || filename.starts_with("libstd-");
-                    !is_std
-                } else {
-                    true
-                };
+                !(filename.starts_with("std-") || filename.starts_with("libstd-"));
 
             if is_dylib_or_debug && can_be_rustc_dynamic_dep && !is_proc_macro {
                 builder.copy_link(&f.path(), &rustc_libdir.join(&filename), FileType::Regular);
@@ -2620,13 +2620,11 @@ pub fn add_to_sysroot(
 /// build stamp, and thus be included in dist archives and copied into sysroots by default.
 /// Note that some kinds of artifacts are copied automatically (e.g. native libraries).
 pub enum ArtifactKeepMode {
-    /// Only keep .rlib files, ignore .rmeta files
-    OnlyRlib,
+    /// Only keep .so files, ignore .rlib and .rmeta files
+    OnlyDylib,
     /// Only keep .rmeta files, ignore .rlib files
     OnlyRmeta,
     /// Keep both .rlib and .rmeta files.
-    /// This is essentially only useful when using `-Zno-embed-metadata`, in which case both the
-    /// .rlib and .rmeta files are needed for compilation/linking.
     BothRlibAndRmeta,
     /// Custom logic for keeping an artifact
     /// It receives the filename of an artifact, and returns true if it should be kept.
@@ -2682,7 +2680,7 @@ pub fn run_cargo(
                 true
             } else {
                 match &artifact_keep_mode {
-                    ArtifactKeepMode::OnlyRlib => filename.ends_with(".rlib"),
+                    ArtifactKeepMode::OnlyDylib => false,
                     ArtifactKeepMode::OnlyRmeta => filename.ends_with(".rmeta"),
                     ArtifactKeepMode::BothRlibAndRmeta => {
                         filename.ends_with(".rmeta") || filename.ends_with(".rlib")

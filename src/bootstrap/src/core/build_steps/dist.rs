@@ -38,6 +38,8 @@ use crate::core::builder::{
 };
 use crate::core::compiler::Compiler;
 use crate::core::config::{GccCiMode, TargetSelection};
+use crate::core::session::{DependencyType, FileType, Mode};
+use crate::trace;
 use crate::utils::build_stamp::{self, BuildStamp};
 use crate::utils::channel::{self, Info};
 use crate::utils::exec::{BootstrapCommand, command};
@@ -45,7 +47,6 @@ use crate::utils::helpers::{
     exe, is_dylib, move_file, t, target_supports_cranelift_backend, timeit,
 };
 use crate::utils::tarball::{GeneratedTarball, OverlayKind, Tarball};
-use crate::{DependencyType, FileType, Mode, trace};
 
 pub(crate) const LLVM_TOOLS: &[&str] = &[
     "llvm-cov",      // used to generate coverage report
@@ -663,7 +664,7 @@ impl CommandLineStep for Rustc {
                 let page_src = file_entry.path();
                 let page_dst = man_dst.join(file_entry.file_name());
                 let src_text = t!(std::fs::read_to_string(&page_src));
-                let version = builder.rust_info().version(builder.build, &builder.version);
+                let version = builder.rust_info().version(builder.sess, &builder.version);
                 let new_text = src_text.replace("<INSERT VERSION HERE>", &version);
                 t!(std::fs::write(&page_dst, &new_text));
             }
@@ -773,7 +774,7 @@ impl Step for DebuggerScripts {
         cp_debugger_script("gdb_load_rust_pretty_printers.py");
         cp_debugger_script("gdb_lookup.py");
         cp_debugger_script("gdb_providers.py");
-        if builder.build.unstable_features() {
+        if builder.sess.unstable_features() {
             cp_debugger_script("gdb_trim_paths.py");
         }
 
@@ -786,6 +787,9 @@ impl Step for DebuggerScripts {
 
         cp_debugger_script("lldb_lookup.py");
         cp_debugger_script("lldb_providers.py");
+        if builder.sess.unstable_features() {
+            cp_debugger_script("lldb_trim_paths.py");
+        }
     }
 }
 
@@ -1620,7 +1624,7 @@ impl CommandLineStep for Miri {
         // This prevents miri from being built for "dist" or "install"
         // on the stable/beta channels. It is a nightly-only tool and should
         // not be included.
-        if !builder.build.unstable_features() {
+        if !builder.sess.unstable_features() {
             return None;
         }
 
@@ -1677,7 +1681,7 @@ impl CommandLineStep for CraneliftCodegenBackend {
         // This prevents rustc_codegen_cranelift from being built for "dist"
         // or "install" on the stable/beta channels. It is not yet stable and
         // should not be included.
-        if !builder.build.unstable_features() {
+        if !builder.sess.unstable_features() {
             return None;
         }
 
@@ -1751,7 +1755,7 @@ impl CommandLineStep for GccCodegenBackend {
         // This prevents rustc_codegen_gcc from being built for "dist"
         // or "install" on the stable/beta channels. It is not yet stable and
         // should not be included.
-        if !builder.build.unstable_features() {
+        if !builder.sess.unstable_features() {
             return None;
         }
 
@@ -2538,13 +2542,13 @@ fn maybe_install_llvm(
     // paths and we don't want those in the sysroot (as we're expecting
     // unversioned paths).
     if target.contains("apple-darwin") && llvm.llvm_output().link_shared() {
-        let src_libdir = builder.llvm_out(target).join("lib");
+        let src_libdir = llvm.llvm_output().root_dir().join("lib");
         let llvm_dylib_path = src_libdir.join("libLLVM.dylib");
         if llvm_dylib_path.exists() {
             builder.install(&llvm_dylib_path, dst_libdir, FileType::NativeLibrary);
 
-            if install_symlink && let Some(llvm_config_path) = &builder.llvm_config(target) {
-                let major = llvm::get_llvm_version_major(builder, llvm_config_path);
+            if install_symlink {
+                let major = llvm::get_llvm_version_major(builder, &builder.host_llvm_config());
                 let versioned_name = match &builder.config.llvm_version_suffix {
                     Some(version_suffix) => format!("libLLVM-{major}{version_suffix}.dylib"),
                     None => {
@@ -2563,18 +2567,17 @@ fn maybe_install_llvm(
             }
         }
         !builder.config.dry_run()
-    } else if let llvm::LlvmBuildStatus::AlreadyBuilt(llvm::LlvmOutput {
-        host_llvm_config, ..
-    }) = llvm
-    {
+    } else if let llvm::LlvmBuildStatus::AlreadyBuilt(llvm_output) = llvm {
         trace!("LLVM already built, installing LLVM files");
-        let mut cmd = command(host_llvm_config);
+
+        let host_llvm = builder.ensure(llvm::Llvm { target: builder.host_target });
+        let mut cmd = command(host_llvm.llvm_config());
         cmd.cached();
         cmd.arg("--libfiles");
         builder.do_if_verbose(|| println!("running {cmd:?}"));
         let files = cmd.run_capture_stdout(builder).stdout();
-        let build_llvm_out = &builder.llvm_out(builder.config.host_target);
-        let target_llvm_out = &builder.llvm_out(target);
+        let build_llvm_out = host_llvm.root_dir();
+        let target_llvm_out = llvm_output.root_dir();
         for file in files.trim_end().split(' ') {
             // If we're not using a custom LLVM, make sure we package for the target.
             let file = if let Ok(relative_path) = Path::new(file).strip_prefix(build_llvm_out) {
@@ -2833,7 +2836,7 @@ impl CommandLineStep for Enzyme {
         // This prevents Enzyme from being built for "dist"
         // or "install" on the stable/beta channels. It is not yet stable and
         // should not be included.
-        if !builder.build.unstable_features() {
+        if !builder.sess.unstable_features() {
             return None;
         }
 
@@ -3145,6 +3148,7 @@ impl CommandLineStep for ReproducibleArtifacts {
             &builder.config.llvm_pgo.use_profile,
             &builder.config.rustdoc_pgo.use_profile,
             &builder.config.cargo_pgo.use_profile,
+            &builder.config.clippy_pgo.use_profile,
         ];
         for profile in pgo_profiles {
             if let Some(path) = profile.as_ref() {
@@ -3227,7 +3231,7 @@ impl CommandLineStep for Gcc {
         // This prevents gcc from being built for "dist"
         // or "install" on the stable/beta channels. It is not yet stable and
         // should not be included.
-        if !builder.build.unstable_features() {
+        if !builder.sess.unstable_features() {
             return None;
         }
 

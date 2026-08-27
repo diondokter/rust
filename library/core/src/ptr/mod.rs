@@ -159,10 +159,10 @@
 //!
 //! Allocations typically have a fixed size that cannot change. However, allocations created by
 //! directly invoking page table operations of the operating system, e.g. via `mmap`, are allowed to
-//! grow by adding more pages to them at the end. Unmapping parts of an allocation (i.e., shrinking
-//! it or punching holes into it) is currently not supported. Allocations created via
-//! "compiler-recognized" operations, such as `std::alloc` methods or `libc::malloc`, can never
-//! change their size, even if they use `mmap` under the hood.
+//! grow by adding more pages to them at the end. Adding more pages before the beginning, or
+//! unmapping parts of an allocation (i.e., shrinking it or punching holes into it), is currently
+//! not supported. Allocations created via "compiler-recognized" operations, such as `std::alloc`
+//! methods or `libc::malloc`, can never change their size, even if they use `mmap` under the hood.
 //!
 //! [`null()`]: null
 //!
@@ -428,9 +428,10 @@
 
 use crate::cmp::Ordering;
 use crate::intrinsics::const_eval_select;
-use crate::marker::{Destruct, FnPtr, PointeeSized};
+use crate::marker::{Destruct, PointeeSized};
 use crate::mem::{self, MaybeUninit, SizedTypeProperties};
 use crate::num::NonZero;
+use crate::ops::FnPtr;
 use crate::{fmt, hash, intrinsics, ub_checks};
 
 #[unstable(feature = "ptr_alignment_type", issue = "102070")]
@@ -2660,21 +2661,21 @@ impl<F: FnPtr> Ord for F {
 #[stable(feature = "fnptr_impls", since = "1.4.0")]
 impl<F: FnPtr> hash::Hash for F {
     fn hash<HH: hash::Hasher>(&self, state: &mut HH) {
-        state.write_usize(self.addr().addr())
+        state.write_usize(self.addr())
     }
 }
 
 #[stable(feature = "fnptr_impls", since = "1.4.0")]
 impl<F: FnPtr> fmt::Pointer for F {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::pointer_fmt_inner(self.addr().addr(), f)
+        fmt::pointer_fmt_inner(self.addr(), f)
     }
 }
 
 #[stable(feature = "fnptr_impls", since = "1.4.0")]
 impl<F: FnPtr> fmt::Debug for F {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::pointer_fmt_inner(self.addr().addr(), f)
+        fmt::pointer_fmt_inner(self.addr(), f)
     }
 }
 

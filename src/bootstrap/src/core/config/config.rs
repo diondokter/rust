@@ -53,7 +53,7 @@ use crate::core::config::{
     GccCiMode, LlvmCiMode, LlvmLibunwind, Merge, ReplaceOpt, RustcLto, SplitDebuginfo,
     StringOrBool, TargetSelection, threads_from_config,
 };
-use crate::core::download::{DownloadContext, download_beta_toolchain, is_download_ci_available};
+use crate::core::download::{DownloadContext, is_download_ci_available};
 use crate::utils::channel::{self, GitInfo};
 use crate::utils::exec::{ExecutionContext, command};
 use crate::utils::helpers::{self, exe, fail, get_host_target, t};
@@ -89,12 +89,12 @@ pub const RUSTC_IF_UNCHANGED_ALLOWED_PATHS: &[&str] = &[
 /// on each field, see the corresponding fields in
 /// `bootstrap.example.toml`.
 #[derive(Clone)]
-pub struct Config {
+pub(crate) struct Config {
     pub change_id: Option<ChangeId>,
     pub bypass_bootstrap_lock: bool,
     pub ccache: Option<String>,
     pub sde: Option<PathBuf>,
-    /// Call Build::ninja() instead of this.
+    /// Call `Session::ninja` instead of this.
     pub ninja_in_file: bool,
     pub submodules: Option<bool>,
     pub compiler_docs: bool,
@@ -172,7 +172,7 @@ pub struct Config {
     pub llvm_link_jobs: Option<u32>,
     pub llvm_version_suffix: Option<String>,
     pub llvm_use_linker: Option<String>,
-    pub llvm_clang_dir: Option<PathBuf>,
+    pub offload_clang_dir: Option<PathBuf>,
     pub llvm_allow_old_toolchain: bool,
     pub llvm_polly: bool,
     pub llvm_clang: bool,
@@ -234,6 +234,7 @@ pub struct Config {
     pub rust_pgo: PgoConfig,
     pub rustdoc_pgo: PgoConfig,
     pub cargo_pgo: PgoConfig,
+    pub clippy_pgo: PgoConfig,
 
     pub stdlib_semver_baseline: Option<String>,
 
@@ -242,9 +243,13 @@ pub struct Config {
 
     pub reproducible_artifacts: Vec<String>,
 
+    /// Build triple for the pre-compiled snapshot compiler.
     pub host_target: TargetSelection,
+    /// Which triples to produce a compiler toolchain for.
     pub hosts: Vec<TargetSelection>,
+    /// Which triples to build libraries (core/alloc/std/test/proc_macro) for.
     pub targets: Vec<TargetSelection>,
+
     pub local_rebuild: bool,
     pub allocator: Option<Allocator>,
     pub control_flow_guard: bool,
@@ -288,7 +293,6 @@ pub struct Config {
     pub windows_rc: Option<PathBuf>,
     pub reuse: Option<PathBuf>,
     pub cargo_native_static: bool,
-    pub configure_args: Vec<String>,
     pub out: PathBuf,
     pub rust_info: channel::GitInfo,
 
@@ -301,12 +305,13 @@ pub struct Config {
     pub in_tree_llvm_info: channel::GitInfo,
     pub in_tree_gcc_info: channel::GitInfo,
 
-    // These are either the stage0 downloaded binaries or the locally installed ones.
-    pub initial_cargo: PathBuf,
-    pub initial_rustc: PathBuf,
-    pub initial_rustdoc: PathBuf,
-    pub initial_cargo_clippy: Option<PathBuf>,
-    pub initial_sysroot: PathBuf,
+    /// rustc/cargo/rustdoc/clippy paths specified in the config file
+    /// Access the `initial_` fields from `Session` to use either the externally configured
+    /// or downloaded (stage0) binaries.
+    pub external_cargo: Option<PathBuf>,
+    pub external_rustc: Option<PathBuf>,
+    pub external_rustdoc: Option<PathBuf>,
+    pub external_cargo_clippy: Option<PathBuf>,
 
     /// Externally configured `rustfmt` binary for formatting in-tree source code.
     /// If you want to use rustfmt for formatting, use the `InternalRustfmt` step, instead of
@@ -499,7 +504,6 @@ impl Config {
             gdb: build_gdb,
             lldb: build_lldb,
             nodejs: build_nodejs,
-
             yarn: build_yarn,
             npm: build_npm,
             python: build_python,
@@ -517,7 +521,10 @@ impl Config {
             profiler: build_profiler,
             cargo_native_static: build_cargo_native_static,
             low_priority: build_low_priority,
-            configure_args: build_configure_args,
+            // Our `./configure` script saves a copy of its command-line arguments as
+            // `build.configure-args` when generating `bootstrap.toml`.
+            // This is for debugging only, and bootstrap itself doesn't use these values.
+            configure_args: _,
             local_rebuild: build_local_rebuild,
             print_step_timings: build_print_step_timings,
             print_step_rusage: build_print_step_rusage,
@@ -641,7 +648,7 @@ impl Config {
             use_linker: llvm_use_linker,
             allow_old_toolchain: llvm_allow_old_toolchain,
             offload: llvm_offload,
-            offload_clang_dir: llvm_clang_dir,
+            offload_clang_dir,
             polly: llvm_polly,
             clang: llvm_clang,
             enable_warnings: llvm_enable_warnings,
@@ -664,8 +671,13 @@ impl Config {
             libgccjit_libs_dir: gcc_libgccjit_libs_dir,
         } = toml_gcc.unwrap_or_default();
 
-        let Pgo { rustc: pgo_rustc, llvm: pgo_llvm, rustdoc: pgo_rustdoc, cargo: pgo_cargo } =
-            toml_pgo.unwrap_or_default();
+        let Pgo {
+            rustc: pgo_rustc,
+            rustdoc: pgo_rustdoc,
+            cargo: pgo_cargo,
+            clippy: pgo_clippy,
+            llvm: pgo_llvm,
+        } = toml_pgo.unwrap_or_default();
 
         // Backcompat: flags have priority over config
         if flags_rust_profile_use.is_some() || flags_rust_profile_generate.is_some() {
@@ -720,6 +732,7 @@ impl Config {
 
         let pgo_rustdoc = init_pgo(pgo_rustdoc, "rustdoc");
         let pgo_cargo = init_pgo(pgo_cargo, "cargo");
+        let pgo_clippy = init_pgo(pgo_clippy, "clippy");
 
         let bootstrap_override_lld = rust_bootstrap_override_lld.unwrap_or_default();
 
@@ -762,7 +775,7 @@ impl Config {
 
         // NOTE: Bootstrap spawns various commands with different working directories.
         // To avoid writing to random places on the file system, `config.out` needs to be an absolute path.
-        let mut out = if !out.is_absolute() {
+        let out = if !out.is_absolute() {
             // `canonicalize` requires the path to already exist. Use our vendored copy of `absolute` instead.
             absolute(&out).expect("can't make empty path absolute")
         } else {
@@ -801,10 +814,10 @@ impl Config {
 
         if !flags_skip_stage0_validation {
             if let Some(rustc) = &build_rustc {
-                check_stage0_version(rustc, "rustc", &src, &exec_ctx);
+                check_external_binary_version(rustc, "rustc", &src, &exec_ctx);
             }
             if let Some(cargo) = &build_cargo {
-                check_stage0_version(cargo, "cargo", &src, &exec_ctx);
+                check_external_binary_version(cargo, "cargo", &src, &exec_ctx);
             }
         }
 
@@ -831,34 +844,6 @@ impl Config {
             bootstrap_cache_path: &build_bootstrap_cache_path,
             ci_env,
         };
-
-        let initial_rustc = build_rustc.unwrap_or_else(|| {
-            download_beta_toolchain(&dwn_ctx, &out);
-            default_stage0_rustc_path(&out)
-        });
-
-        let initial_rustdoc = build_rustdoc
-            .unwrap_or_else(|| initial_rustc.with_file_name(exe("rustdoc", host_target)));
-
-        let initial_sysroot = t!(PathBuf::from_str(
-            command(&initial_rustc)
-                .args(["--print", "sysroot"])
-                .run_in_dry_run()
-                .run_capture_stdout(&exec_ctx)
-                .stdout()
-                .trim()
-        ));
-
-        let initial_cargo = build_cargo.unwrap_or_else(|| {
-            download_beta_toolchain(&dwn_ctx, &out);
-            initial_sysroot.join("bin").join(exe("cargo", host_target))
-        });
-
-        // NOTE: it's important this comes *after* we set `initial_rustc` just above.
-        if exec_ctx.dry_run() {
-            out = out.join("tmp-dry-run");
-            fs::create_dir_all(&out).expect("Failed to create dry-run directory");
-        }
 
         let file_content = t!(fs::read_to_string(src.join("src/ci/channel")));
         let ci_channel = file_content.trim_end();
@@ -1189,8 +1174,7 @@ impl Config {
         let download_rustc = download_rustc_commit.is_some();
 
         let stage = match flags_cmd {
-            Subcommand::Check { .. } => flags_stage.or(build_check_stage).unwrap_or(1),
-            Subcommand::Clippy { .. } | Subcommand::Fix => {
+            Subcommand::Check { .. } | Subcommand::Clippy { .. } | Subcommand::Fix { .. } => {
                 flags_stage.or(build_check_stage).unwrap_or(1)
             }
             // `download-rustc` only has a speed-up for stage2 builds. Default to stage2 unless explicitly overridden.
@@ -1263,7 +1247,7 @@ impl Config {
             helpers::exit_process(1);
         }
 
-        if matches!(flags_cmd, Subcommand::Fix) {
+        if matches!(flags_cmd, Subcommand::Fix { .. }) {
             eprintln!(
                 "WARNING: `x fix` is provided on a best-effort basis and does not support all `cargo fix` options correctly."
             );
@@ -1289,7 +1273,7 @@ NOTE: Please add `--stage 2` to your command line, or if you're sure you want to
                 Subcommand::Clean { .. }
                 | Subcommand::Check { .. }
                 | Subcommand::Clippy { .. }
-                | Subcommand::Fix
+                | Subcommand::Fix { .. }
                 | Subcommand::Run { .. }
                 | Subcommand::Setup { .. }
                 | Subcommand::Format { .. }
@@ -1422,6 +1406,7 @@ NOTE: Please add `--stage 2` to your command line, or if you're sure you want to
             channel,
             ci_env,
             clippy_info,
+            clippy_pgo: pgo_clippy,
             cmd: flags_cmd,
             codegen_tests: rust_codegen_tests.unwrap_or(true),
             color: flags_color,
@@ -1430,7 +1415,6 @@ NOTE: Please add `--stage 2` to your command line, or if you're sure you want to
             compiletest_allow_stage0: build_compiletest_allow_stage0.unwrap_or(false),
             compiletest_diff_tool: build_compiletest_diff_tool,
             config: toml_path,
-            configure_args: build_configure_args.unwrap_or_default(),
             control_flow_guard: rust_control_flow_guard.unwrap_or(false),
             datadir: install_datadir.map(PathBuf::from),
             deny_warnings,
@@ -1456,6 +1440,10 @@ NOTE: Please add `--stage 2` to your command line, or if you're sure you want to
             explicit_stage_from_cli: flags_stage.is_some(),
             explicit_stage_from_config,
             extended: build_extended.unwrap_or(false),
+            external_cargo: build_cargo,
+            external_cargo_clippy: build_cargo_clippy,
+            external_rustc: build_rustc,
+            external_rustdoc: build_rustdoc,
             external_rustfmt: build_rustfmt,
             free_args: flags_free_args,
             full_bootstrap: build_full_bootstrap.unwrap_or(false),
@@ -1467,11 +1455,6 @@ NOTE: Please add `--stage 2` to your command line, or if you're sure you want to
             in_tree_llvm_info,
             include_default_paths: flags_include_default_paths,
             incremental: flags_incremental || rust_incremental == Some(true),
-            initial_cargo,
-            initial_cargo_clippy: build_cargo_clippy,
-            initial_rustc,
-            initial_rustdoc,
-            initial_sysroot,
             jobs: Some(threads_from_config(flags_jobs.or(build_jobs).unwrap_or(0))),
             json_output: flags_json_output,
             keep_stage: flags_keep_stage,
@@ -1489,7 +1472,6 @@ NOTE: Please add `--stage 2` to your command line, or if you're sure you want to
             llvm_ci_mode,
             llvm_clang: llvm_clang.unwrap_or(false),
             llvm_clang_cl,
-            llvm_clang_dir: llvm_clang_dir.map(PathBuf::from),
             llvm_cxxflags,
             llvm_enable_warnings: llvm_enable_warnings.unwrap_or(false),
             llvm_enzyme: llvm_enzyme.unwrap_or(false),
@@ -1522,6 +1504,7 @@ NOTE: Please add `--stage 2` to your command line, or if you're sure you want to
             musl_root: rust_musl_root.map(PathBuf::from),
             ninja_in_file: llvm_ninja.unwrap_or(true),
             nodejs: build_nodejs.map(PathBuf::from),
+            offload_clang_dir: offload_clang_dir.map(PathBuf::from),
             omit_git_hash,
             on_fail: flags_on_fail,
             optimized_compiler_builtins,
@@ -1845,7 +1828,7 @@ NOTE: Please add `--stage 2` to your command line, or if you're sure you want to
     ///
     /// This *does not* update the submodule if `bootstrap.toml` explicitly says
     /// not to, or if we're not in a git repository (like a plain source
-    /// tarball). Typically [`crate::Build::require_submodule`] should be
+    /// tarball). Typically [`crate::core::session::Session::require_submodule`] should be
     /// used instead to provide a nice error to the user if the submodule is
     /// missing.
     #[cfg_attr(
@@ -2267,8 +2250,9 @@ fn postprocess_toml(
     toml.merge(None, &mut Default::default(), override_toml, ReplaceOpt::Override);
 }
 
-/// check rustc/cargo version is same or lower with 1 apart from the building one
-pub fn check_stage0_version(
+/// Check that the version of an externally provided rustc/cargo is either the same or 1 version
+/// older than the in-tree version.
+fn check_external_binary_version(
     program_path: &Path,
     component_name: &'static str,
     src_dir: &Path,
@@ -2278,32 +2262,30 @@ pub fn check_stage0_version(
         return;
     }
 
-    let stage0_output =
-        command(program_path).arg("--version").run_capture_stdout(exec_ctx).stdout();
-    let mut stage0_output = stage0_output.lines().next().unwrap().split(' ');
+    let output = command(program_path).arg("--version").run_capture_stdout(exec_ctx).stdout();
+    let mut output = output.lines().next().unwrap().split(' ');
 
-    let stage0_name = stage0_output.next().unwrap();
-    if stage0_name != component_name {
+    let name = output.next().unwrap();
+    if name != component_name {
         fail(&format!(
-            "Expected to find {component_name} at {} but it claims to be {stage0_name}",
+            "Expected to find {component_name} at {} but it claims to be {name}",
             program_path.display()
         ));
     }
 
-    let stage0_version =
-        semver::Version::parse(stage0_output.next().unwrap().split('-').next().unwrap().trim())
-            .unwrap();
+    let binary_version =
+        semver::Version::parse(output.next().unwrap().split('-').next().unwrap().trim()).unwrap();
     let source_version =
         semver::Version::parse(fs::read_to_string(src_dir.join("src/version")).unwrap().trim())
             .unwrap();
-    if !(source_version == stage0_version
-        || (source_version.major == stage0_version.major
-            && (source_version.minor == stage0_version.minor
-                || source_version.minor == stage0_version.minor + 1)))
+    if !(source_version == binary_version
+        || (source_version.major == binary_version.major
+            && (source_version.minor == binary_version.minor
+                || source_version.minor == binary_version.minor + 1)))
     {
         let prev_version = format!("{}.{}.x", source_version.major, source_version.minor - 1);
         fail(&format!(
-            "Unexpected {component_name} version: {stage0_version}, we should use {prev_version}/{source_version} to build source with {source_version}"
+            "Unexpected {component_name} version: {binary_version}, we should use {prev_version}/{source_version} to build source with {source_version}"
         ));
     }
 }
