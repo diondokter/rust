@@ -23,7 +23,7 @@ pub(super) struct CollapseIdenticalYields;
 impl<'tcx> MirPass<'tcx> for CollapseIdenticalYields {
     #[instrument(level = "debug", skip(self, tcx, body), ret)]
     fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
-        if body.coroutine_kind().is_none() {
+        if body.coroutine_kind().is_none() || tcx.sess.opts.unstable_opts.skip {
             return;
         }
 

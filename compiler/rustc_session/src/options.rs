@@ -2852,6 +2852,7 @@ written to standard error output)"),
     simulate_remapped_rust_src_base: Option<PathBuf> = (None, parse_opt_pathbuf, [TRACKED],
         "simulate the effect of remap-debuginfo = true at bootstrapping by remapping path \
         to rust's source base directory. only meant for testing purposes"),
+    skip: bool = (false, parse_bool, [TRACKED], "skip collapsing yields"),
     small_data_threshold: Option<usize> = (None, parse_opt_number, [TRACKED],
         "Set the threshold for objects to be stored in a \"small data\" section"),
     span_debug: bool = (false, parse_bool, [UNTRACKED],
