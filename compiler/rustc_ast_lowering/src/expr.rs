@@ -1010,14 +1010,6 @@ impl<'hir> LoweringContext<'_, 'hir> {
         expr: &'hir hir::Expr<'hir>,
         await_kind: FutureKind,
     ) -> hir::ExprKind<'hir> {
-        return hir::ExprKind::Await(
-            expr,
-            match await_kind {
-                FutureKind::Future => hir::FutureKind::Future,
-                FutureKind::AsyncIterator => hir::FutureKind::AsyncIterator,
-            },
-        );
-
         let full_span = expr.span.to(await_kw_span);
 
         let is_async_gen = match self.coroutine_kind {
@@ -1050,6 +1042,14 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 );
             }
         };
+
+        return hir::ExprKind::Await(
+            expr,
+            match await_kind {
+                FutureKind::Future => hir::FutureKind::Future,
+                FutureKind::AsyncIterator => hir::FutureKind::AsyncIterator,
+            },
+        );
 
         let features = match await_kind {
             FutureKind::Future if is_async_gen => Some(Arc::clone(&crate::ALLOW_ASYNC_GEN)),

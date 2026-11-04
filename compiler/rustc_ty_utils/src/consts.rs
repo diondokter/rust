@@ -178,7 +178,7 @@ fn recurse_build<'tcx>(
         ExprKind::PointerCoercion { .. } => {
             error(GenericConstantTooComplexSub::PointerNotSupported(node.span))?
         }
-        ExprKind::Yield { .. } => {
+        ExprKind::Yield { .. } | ExprKind::Await { .. } => {
             error(GenericConstantTooComplexSub::YieldNotSupported(node.span))?
         }
         ExprKind::Continue { .. }
@@ -320,6 +320,7 @@ impl<'a, 'tcx> IsThirPolymorphic<'a, 'tcx> {
             | thir::ExprKind::StaticRef { .. }
             | thir::ExprKind::InlineAsm(_)
             | thir::ExprKind::ThreadLocalRef(_)
+            | thir::ExprKind::Await { .. }
             | thir::ExprKind::Yield { .. } => false,
             thir::ExprKind::Reborrow { .. } => {
                 unimplemented!();

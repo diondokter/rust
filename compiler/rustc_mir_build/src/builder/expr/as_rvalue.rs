@@ -377,6 +377,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             }
 
             ExprKind::Yield { .. }
+            | ExprKind::Await { .. }
             | ExprKind::Block { .. }
             | ExprKind::Match { .. }
             | ExprKind::If { .. }

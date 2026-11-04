@@ -18,9 +18,8 @@ use rustc_ast::{AsmMacro, InlineAsmOptions, InlineAsmTemplatePiece, Mutability};
 use rustc_attr_ir::UnrollAttr;
 use rustc_data_structures::fx::FxIndexMap;
 use rustc_data_structures::thin_vec::ThinVec;
-use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
-use rustc_hir::{BindingMode, ByRef, HirId, MatchSource, RangeEnd};
+use rustc_hir::{self as hir, BindingMode, ByRef, FutureKind, HirId, MatchSource, RangeEnd};
 use rustc_index::{IndexVec, newtype_index};
 use rustc_macros::{StableHash, TyDecodable, TyEncodable, TypeVisitable};
 use rustc_span::def_id::LocalDefId;
@@ -553,6 +552,11 @@ pub enum ExprKind<'tcx> {
     /// A `yield` expression.
     Yield {
         value: ExprId,
+    },
+    /// A `.await` expression.
+    Await {
+        value: ExprId,
+        kind: FutureKind,
     },
     /// Use of an ADT that implements the Reborrow (for Mut) or CoerceShared traits (for Not). This
     /// expression is produced by the [`Adjust::GenericReborrow`] in places where normally the ADT

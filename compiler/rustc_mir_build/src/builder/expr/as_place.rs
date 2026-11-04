@@ -581,6 +581,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             | ExprKind::StaticRef { .. }
             | ExprKind::InlineAsm { .. }
             | ExprKind::Yield { .. }
+            | ExprKind::Await { .. }
             | ExprKind::ThreadLocalRef(_)
             | ExprKind::Call { .. }
             | ExprKind::ByUse { .. }

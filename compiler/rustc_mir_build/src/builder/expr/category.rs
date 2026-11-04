@@ -57,6 +57,7 @@ impl Category {
             | ExprKind::Borrow { .. }
             | ExprKind::RawBorrow { .. }
             | ExprKind::Yield { .. }
+            | ExprKind::Await { .. }
             | ExprKind::Call { .. }
             | ExprKind::ByUse { .. }
             | ExprKind::InlineAsm { .. } => Some(Category::Rvalue(RvalueFunc::Into)),

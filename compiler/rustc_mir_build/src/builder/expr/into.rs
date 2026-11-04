@@ -885,6 +885,11 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 resume.unit()
             }
 
+            ExprKind::Await { value, kind } => {
+                // @Dion: Do we desugar here?
+                todo!()
+            }
+
             // these are the cases that are more naturally handled by some other mode
             ExprKind::Unary { .. }
             | ExprKind::Binary { .. }

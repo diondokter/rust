@@ -404,8 +404,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             }
             ExprKind::Yield(value) => self.check_expr_yield(value, expr),
             ExprKind::Await(expr, _) => {
-                // The await yields whatever the expression yields
-                self.check_expr_with_expectation(expr, expected)
+                // The await yields whatever future yields
+                todo!()
             }
             ExprKind::UnsafeBinderCast(kind, inner_expr, ty) => {
                 self.check_expr_unsafe_binder_cast(expr.span, kind, inner_expr, ty, expected)
