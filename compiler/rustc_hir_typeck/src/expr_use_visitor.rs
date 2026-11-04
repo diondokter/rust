@@ -565,7 +565,11 @@ impl<'tcx, Cx: TypeInformationCtxt<'tcx>, D: Delegate<'tcx>> ExprUseVisitor<'tcx
                 self.walk_captures(closure)?;
             }
 
-            hir::ExprKind::Yield(value, _) => {
+            hir::ExprKind::Yield(value) => {
+                self.consume_expr(value)?;
+            }
+
+            hir::ExprKind::Await(value, _) => {
                 self.consume_expr(value)?;
             }
         }
@@ -1377,6 +1381,7 @@ impl<'tcx, Cx: TypeInformationCtxt<'tcx>, D: Delegate<'tcx>> ExprUseVisitor<'tcx
             | hir::ExprKind::Let(..)
             | hir::ExprKind::Loop(..)
             | hir::ExprKind::Match(..)
+            | hir::ExprKind::Await(..)
             | hir::ExprKind::Lit(..)
             | hir::ExprKind::ConstBlock(..)
             | hir::ExprKind::Break(..)

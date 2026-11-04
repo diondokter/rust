@@ -301,7 +301,7 @@ impl<'tcx> LateLintPass<'tcx> for UnusedResults {
         let ty = cx.typeck_results().expr_ty(expr);
         let needs_binding = ty.has_significant_drop(cx.tcx, cx.typing_env());
 
-        if let hir::ExprKind::Match(await_expr, _arms, hir::MatchSource::AwaitDesugar) = expr.kind
+        if let hir::ExprKind::Await(await_expr, _) = expr.kind
             && let ty = cx.typeck_results().expr_ty(await_expr)
             && let ty::Alias(_, ty::AliasTy { kind: ty::Opaque { def_id: future_def_id }, .. }) = ty.kind()
             && cx.tcx.ty_is_opaque_future(ty)

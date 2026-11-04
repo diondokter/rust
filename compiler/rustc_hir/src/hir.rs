@@ -2271,6 +2271,7 @@ impl Expr<'_> {
             | ExprKind::Lit(_)
             | ExprKind::Loop(..)
             | ExprKind::Match(..)
+            | ExprKind::Await(..)
             | ExprKind::MethodCall(..)
             | ExprKind::OffsetOf(..)
             | ExprKind::Path(..)
@@ -2332,6 +2333,7 @@ impl Expr<'_> {
             | ExprKind::Tup(..)
             | ExprKind::If(..)
             | ExprKind::Match(..)
+            | ExprKind::Await(..)
             | ExprKind::Closure { .. }
             | ExprKind::Block(..)
             | ExprKind::Repeat(..)
@@ -2423,6 +2425,7 @@ impl Expr<'_> {
             | ExprKind::If(..)
             | ExprKind::Loop(..)
             | ExprKind::Match(..)
+            | ExprKind::Await(..)
             | ExprKind::Closure(_)
             | ExprKind::Block(..)
             | ExprKind::Assign(..)
@@ -2541,6 +2544,7 @@ impl Expr<'_> {
             ExprKind::Repeat(arg, _) => arg.can_have_side_effects(),
             ExprKind::If(..)
             | ExprKind::Match(..)
+            | ExprKind::Await(..)
             | ExprKind::MethodCall(..)
             | ExprKind::Call(..)
             | ExprKind::Closure { .. }
@@ -2789,8 +2793,11 @@ pub enum ExprKind<'hir> {
     /// to be repeated; the second is the number of times to repeat it.
     Repeat(&'hir Expr<'hir>, &'hir ConstArg<'hir>),
 
-    /// A suspension point for coroutines (i.e., `yield <expr>`).
-    Yield(&'hir Expr<'hir>, YieldSource),
+    /// A suspension point for (generator) coroutines (i.e., `yield <expr>`).
+    Yield(&'hir Expr<'hir>),
+
+    /// A suspension point for (async) coroutines (i.e., `<expr>.await`).
+    Await(&'hir Expr<'hir>, FutureKind),
 
     /// Operators which can be used to interconvert `unsafe` binder types.
     /// e.g. `unsafe<'a> &'a i32` <=> `&i32`.
@@ -2897,8 +2904,6 @@ pub enum MatchSource {
     ForLoopDesugar,
     /// A desugared `?` operator.
     TryDesugar(HirId),
-    /// A desugared `<expr>.await`.
-    AwaitDesugar,
     /// A desugared `format_args!()`.
     FormatArgs,
 }
@@ -2912,7 +2917,6 @@ impl MatchSource {
             Postfix => ".match",
             ForLoopDesugar => "for",
             TryDesugar(_) => "?",
-            AwaitDesugar => ".await",
             FormatArgs => "format_args!()",
         }
     }
@@ -2968,22 +2972,14 @@ pub struct Destination {
     pub target_id: Result<HirId, LoopIdError>,
 }
 
-/// The yield kind that caused an `ExprKind::Yield`.
-#[derive(Copy, Clone, Debug, StableHash)]
-pub enum YieldSource {
-    /// An `<expr>.await`.
-    Await { expr: Option<HirId> },
-    /// A plain `yield`.
-    Yield,
-}
-
-impl fmt::Display for YieldSource {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            YieldSource::Await { .. } => "`await`",
-            YieldSource::Yield => "`yield`",
-        })
-    }
+/// Used to customize the desugaring based on what kind of future we are awaiting.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, StableHash)]
+pub enum FutureKind {
+    /// We are awaiting a normal future
+    Future,
+    /// We are awaiting something that's known to be an AsyncIterator (i.e. we are in the header of
+    /// a `for await` loop)
+    AsyncIterator,
 }
 
 /// Represents a function's signature in a trait declaration,

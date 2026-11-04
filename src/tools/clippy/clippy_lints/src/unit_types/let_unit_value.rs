@@ -9,7 +9,7 @@ use rustc_attr_ir::find_attr;
 use rustc_errors::Applicability;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::intravisit::{Visitor, walk_body, walk_expr};
-use rustc_hir::{Expr, ExprKind, HirId, HirIdSet, LetStmt, MatchSource, Node, PatKind, QPath, TyKind};
+use rustc_hir::{Expr, ExprKind, HirId, HirIdSet, LetStmt, Node, PatKind, QPath, TyKind};
 use rustc_lint::{LateContext, LintContext as _};
 use rustc_middle::ty;
 use rustc_span::Span;
@@ -67,7 +67,7 @@ pub(super) fn check<'tcx>(cx: &LateContext<'tcx>, format_args: &FormatArgsStorag
                 );
             }
         } else {
-            if let ExprKind::Match(_, _, MatchSource::AwaitDesugar) = init.kind {
+            if let ExprKind::Await(..) = init.kind {
                 return;
             }
 

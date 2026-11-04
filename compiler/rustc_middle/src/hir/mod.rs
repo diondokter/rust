@@ -289,7 +289,8 @@ impl<'tcx> TyCtxt<'tcx> {
                     | ExprKind::InlineAsm(_)
                     | ExprKind::Struct(_, _, _)
                     | ExprKind::Repeat(_, _)
-                    | ExprKind::Yield(_, _) => true,
+                    | ExprKind::Await(_, _)
+                    | ExprKind::Yield(_) => true,
 
                     // These expressions have no (direct) sub-exprs.
                     ExprKind::ConstBlock(_)

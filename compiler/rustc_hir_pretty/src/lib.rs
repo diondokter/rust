@@ -1804,9 +1804,13 @@ impl<'a> State<'a> {
                 }
                 self.word(")");
             }
-            hir::ExprKind::Yield(expr, _) => {
+            hir::ExprKind::Yield(expr) => {
                 self.word_space("yield");
                 self.print_expr_cond_paren(expr, self.precedence(expr) < ExprPrecedence::Jump);
+            }
+            hir::ExprKind::Await(expr, _) => {
+                self.print_expr_cond_paren(expr, self.precedence(expr) < ExprPrecedence::Jump);
+                self.word(".await");
             }
             hir::ExprKind::Err(_) => {
                 self.popen();

@@ -535,6 +535,7 @@ impl HirEqInterExpr<'_, '_, '_> {
             (ExprKind::AssignOp(lo, ll, lr), ExprKind::AssignOp(ro, rl, rr)) => {
                 self.inner.allow_side_effects && lo.node == ro.node && self.eq_expr(ll, rl) && self.eq_expr(lr, rr)
             },
+            (ExprKind::Await(le, _), ExprKind::Await(re, _)) => return self.eq_expr(le, re),
             (ExprKind::Block(l, _), ExprKind::Block(r, _)) => self.eq_block(l, r),
             (ExprKind::Binary(l_op, ll, lr), ExprKind::Binary(r_op, rl, rr)) => {
                 l_op.node == r_op.node && self.eq_expr(ll, rl) && self.eq_expr(lr, rr)
@@ -625,13 +626,14 @@ impl HirEqInterExpr<'_, '_, '_> {
             (ExprKind::Use(l_expr, _), ExprKind::Use(r_expr, _)) => self.eq_expr(l_expr, r_expr),
             (ExprKind::Type(le, lt), ExprKind::Type(re, rt)) => self.eq_expr(le, re) && self.eq_ty(lt, rt),
             (ExprKind::Unary(l_op, le), ExprKind::Unary(r_op, re)) => l_op == r_op && self.eq_expr(le, re),
-            (ExprKind::Yield(le, _), ExprKind::Yield(re, _)) => return self.eq_expr(le, re),
+            (ExprKind::Yield(le), ExprKind::Yield(re)) => return self.eq_expr(le, re),
             (
                 // Else branches for branches above, grouped as per `match_same_arms`.
                 | ExprKind::AddrOf(..)
                 | ExprKind::Array(..)
                 | ExprKind::Assign(..)
                 | ExprKind::AssignOp(..)
+                | ExprKind::Await(..)
                 | ExprKind::Binary(..)
                 | ExprKind::Become(..)
                 | ExprKind::Block(..)
@@ -1252,7 +1254,7 @@ impl<'a, 'tcx> SpanlessHash<'a, 'tcx> {
             ExprKind::ConstBlock(l_id) => {
                 self.hash_body(l_id.body);
             },
-            ExprKind::DropTemps(e) | ExprKind::Yield(e, _) => {
+            ExprKind::DropTemps(e) | ExprKind::Yield(e) | ExprKind::Await(e, _) => {
                 self.hash_expr(e);
             },
             ExprKind::Field(e, f) => {
@@ -1798,7 +1800,7 @@ pub fn has_ambiguous_literal_in_expr(cx: &LateContext<'_>, expr: &Expr<'_>) -> b
         | ExprKind::AddrOf(_, _, e)
         | ExprKind::Field(e, _)
         | ExprKind::Index(e, _, _)
-        | ExprKind::Yield(e, _) => has_ambiguous_literal_in_expr(cx, e),
+        | ExprKind::Yield(e) => has_ambiguous_literal_in_expr(cx, e),
 
         ExprKind::MethodCall(_, receiver, args, _) | ExprKind::Call(receiver, args) => {
             has_ambiguous_literal_in_expr(cx, receiver) || args.iter().any(|e| has_ambiguous_literal_in_expr(cx, e))

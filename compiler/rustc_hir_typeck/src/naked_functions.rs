@@ -160,6 +160,7 @@ impl CheckInlineAssembly {
             | ExprKind::Become(..)
             | ExprKind::Struct(..)
             | ExprKind::Repeat(..)
+            | ExprKind::Await(..)
             | ExprKind::Yield(..) => {
                 self.items.push((ItemKind::NonAsm, span));
             }

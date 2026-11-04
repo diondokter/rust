@@ -5,7 +5,7 @@ use clippy_utils::ty::implements_trait;
 use rustc_abi::Size;
 use rustc_attr_ir::lang_items::LangItem;
 use rustc_errors::Applicability;
-use rustc_hir::{Expr, ExprKind, MatchSource};
+use rustc_hir::{Expr, ExprKind};
 use rustc_lint::{LateContext, LateLintPass, impl_lint_pass};
 use rustc_middle::ty;
 
@@ -57,8 +57,8 @@ impl LargeFuture {
 
 impl<'tcx> LateLintPass<'tcx> for LargeFuture {
     fn check_expr(&mut self, cx: &LateContext<'tcx>, expr: &'tcx Expr<'tcx>) {
-        if let ExprKind::Match(scrutinee, _, MatchSource::AwaitDesugar) = expr.kind
-            && let ExprKind::Call(func, [arg]) = scrutinee.kind
+        if let ExprKind::Await(await_expr, _) = expr.kind
+            && let ExprKind::Call(func, [arg]) = await_expr.kind
             && let ExprKind::Path(qpath) = func.kind
             && cx.tcx.qpath_is_lang_item(qpath, LangItem::IntoFutureIntoFuture)
             && !expr.span.from_expansion()

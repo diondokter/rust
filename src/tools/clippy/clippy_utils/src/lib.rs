@@ -3571,8 +3571,8 @@ pub fn peel_hir_ty_options<'tcx>(cx: &LateContext<'tcx>, mut hir_ty: &'tcx hir::
 /// If `expr` is a desugared `.await`, return the original expression if it does not come from a
 /// macro expansion.
 pub fn desugar_await<'tcx>(expr: &'tcx Expr<'_>) -> Option<&'tcx Expr<'tcx>> {
-    if let ExprKind::Match(match_value, _, MatchSource::AwaitDesugar) = expr.kind
-        && let ExprKind::Call(_, [into_future_arg]) = match_value.kind
+    if let ExprKind::Await(await_expr, _) = expr.kind
+        && let ExprKind::Call(_, [into_future_arg]) = await_expr.kind
         && let ctxt = expr.span.ctxt()
         && for_each_expr_without_closures(into_future_arg, |e| {
             walk_span_to_context(e.span, ctxt).map_or(ControlFlow::Break(()), |_| ControlFlow::Continue(()))

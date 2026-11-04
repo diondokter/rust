@@ -611,9 +611,14 @@ impl<'a, 'tcx> PrintVisitor<'a, 'tcx> {
                 chain!(self, "let {ret_ty} = {fn_decl}.output");
                 self.body(body_id);
             },
-            ExprKind::Yield(sub, source) => {
+            ExprKind::Yield(sub) => {
                 bind!(self, sub);
-                kind!("Yield(sub, YieldSource::{source:?})");
+                kind!("Yield(sub)");
+                self.expr(sub);
+            },
+            ExprKind::Await(sub, kind) => {
+                bind!(self, sub);
+                kind!("Await(sub, FutureKind::{kind:?})");
                 self.expr(sub);
             },
             ExprKind::Block(block, label) => {

@@ -146,6 +146,7 @@ impl<'a> Sugg<'a> {
             | ExprKind::Let(..)
             | ExprKind::Closure { .. }
             | ExprKind::Unary(..)
+            | ExprKind::Await(..)
             | ExprKind::Match(_, _,
                 MatchSource::Normal | MatchSource::Postfix | MatchSource::ForLoopDesugar
             ) => Sugg::MaybeParen(get_snippet(expr.span)),
@@ -173,7 +174,7 @@ impl<'a> Sugg<'a> {
             | ExprKind::Err(_)
             | ExprKind::UnsafeBinderCast(..)
             | ExprKind::Match(_, _,
-                MatchSource::AwaitDesugar | MatchSource::TryDesugar(_) | MatchSource::FormatArgs
+                MatchSource::TryDesugar(_) | MatchSource::FormatArgs
             ) => Sugg::NonParen(get_snippet(expr.span)),
             ExprKind::DropTemps(inner) => Self::hir_from_snippet(cx, inner, get_snippet),
             ExprKind::Assign(lhs, rhs, _) => {

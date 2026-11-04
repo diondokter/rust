@@ -6961,8 +6961,8 @@ struct AwaitsVisitor {
 
 impl<'v> Visitor<'v> for AwaitsVisitor {
     fn visit_expr(&mut self, ex: &'v hir::Expr<'v>) {
-        if let hir::ExprKind::Yield(_, hir::YieldSource::Await { expr: Some(id) }) = ex.kind {
-            self.awaits.push(id)
+        if let hir::ExprKind::Await(expr, _) = ex.kind {
+            self.awaits.push(expr.hir_id);
         }
         hir::intravisit::walk_expr(self, ex)
     }

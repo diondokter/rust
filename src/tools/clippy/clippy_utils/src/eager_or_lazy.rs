@@ -373,6 +373,7 @@ impl<'tcx> Visitor<'tcx> for ExprEagernessVisitor<'tcx> {
             | ExprKind::Let(..)
             | ExprKind::If(..)
             | ExprKind::Match(..)
+            | ExprKind::Await(..)
             | ExprKind::Closure { .. }
             | ExprKind::Field(..)
             | ExprKind::AddrOf(..)

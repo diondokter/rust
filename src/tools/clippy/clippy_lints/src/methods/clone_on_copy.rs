@@ -44,7 +44,8 @@ fn check_parent_is_suffix_expr(cx: &LateContext<'_>, expr: &Expr<'_>) -> ParentI
                 }
             },
             ExprKind::MethodCall(_, self_arg, ..) if expr.hir_id == self_arg.hir_id => ParentIsSuffixExpr::Yes,
-            ExprKind::Match(_, _, MatchSource::TryDesugar(_) | MatchSource::AwaitDesugar)
+            ExprKind::Match(_, _, MatchSource::TryDesugar(_))
+            | ExprKind::Await(..)
             | ExprKind::Field(..)
             | ExprKind::Index(..) => ParentIsSuffixExpr::Yes,
             _ => ParentIsSuffixExpr::No,

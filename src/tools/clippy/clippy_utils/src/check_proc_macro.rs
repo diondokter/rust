@@ -25,7 +25,6 @@ use rustc_hir::{
     FnHeader, FnRetTy, HirId, Impl, ImplItem, ImplItemImplKind, ImplItemKind, IsAuto, Item, ItemKind, Lit, LoopSource,
     MatchSource, Node, PatExpr, PatExprKind, PatKind, Path, PolyTraitRef, QPath, Safety, TraitBoundModifiers,
     TraitImplHeader, TraitItem, TraitItemKind, TraitRef, Ty, TyKind, UnOp, UnsafeSource, Variant, VariantData,
-    YieldSource,
 };
 use rustc_lint::{EarlyContext, LateContext, LintContext};
 use rustc_middle::ty::TyCtxt;
@@ -201,7 +200,7 @@ fn expr_search_pat(tcx: TyCtxt<'_>, e: &Expr<'_>) -> (Pat, Pat) {
             ExprKind::Match(e, _, MatchSource::TryDesugar(_)) => {
                 (expr_search_pat_inner(tcx, e, outer_span).0, Pat::Str("?"))
             },
-            ExprKind::Match(e, _, MatchSource::AwaitDesugar) | ExprKind::Yield(e, YieldSource::Await { .. }) => {
+            ExprKind::Await(e, _) => {
                 (expr_search_pat_inner(tcx, e, outer_span).0, Pat::Str("await"))
             },
             ExprKind::Closure(&Closure { body, .. }) => (
@@ -232,7 +231,7 @@ fn expr_search_pat(tcx: TyCtxt<'_>, e: &Expr<'_>) -> (Pat, Pat) {
             ExprKind::Ret(None) => (Pat::Str("return"), Pat::Str("return")),
             ExprKind::Ret(Some(e)) => (Pat::Str("return"), expr_search_pat_inner(tcx, e, outer_span).1),
             ExprKind::Struct(path, _, _) => (qpath_search_pat(path).0, Pat::Str("}")),
-            ExprKind::Yield(e, YieldSource::Yield) => (Pat::Str("yield"), expr_search_pat_inner(tcx, e, outer_span).1),
+            ExprKind::Yield(e) => (Pat::Str("yield"), expr_search_pat_inner(tcx, e, outer_span).1),
             _ => (Pat::Str(""), Pat::Str("")),
         }
     }

@@ -707,6 +707,7 @@ pub fn for_each_unconsumed_temporary<'tcx, B>(
             | ExprKind::Field(e, _)
             | ExprKind::Unary(UnOp::Deref, e)
             | ExprKind::Match(e, ..)
+            | ExprKind::Await(e, _)
             | ExprKind::Let(&LetExpr { init: e, .. }) => {
                 helper(typeck, false, e, f)?;
             },

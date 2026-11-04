@@ -91,7 +91,7 @@ fn is_inside_unawaited_async_block(cx: &LateContext<'_>, expr: &Expr<'_>) -> boo
 fn is_async_block_awaited(cx: &LateContext<'_>, async_expr: &Expr<'_>) -> bool {
     for (_, parent_node) in cx.tcx.hir_parent_iter(async_expr.hir_id) {
         if let Node::Expr(Expr {
-            kind: ExprKind::Match(_, _, hir::MatchSource::AwaitDesugar),
+            kind: ExprKind::Await(_, _),
             ..
         }) = parent_node
         {
@@ -178,7 +178,7 @@ impl<'hir> Visitor<'hir> for LoopVisitor<'hir, '_> {
                     self.is_finite = true;
                 }
             },
-            ExprKind::Ret(..) | ExprKind::Yield(_, hir::YieldSource::Yield) => self.is_finite = true,
+            ExprKind::Ret(..) | ExprKind::Yield(_) => self.is_finite = true,
             ExprKind::Loop(_, label, _, _) => {
                 if let Some(label) = label {
                     self.inner_labels.push(*label);

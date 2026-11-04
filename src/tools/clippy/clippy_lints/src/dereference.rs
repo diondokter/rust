@@ -810,7 +810,7 @@ fn is_in_method_chain<'tcx>(cx: &LateContext<'tcx>, e: &'tcx Expr<'tcx>) -> bool
             {
                 true
             },
-            ExprKind::Match(.., MatchSource::TryDesugar(_) | MatchSource::AwaitDesugar) | ExprKind::Field(_, _) => true,
+            ExprKind::Match(.., MatchSource::TryDesugar(_)) | ExprKind::Await(_, _) | ExprKind::Field(_, _) => true,
             _ => false,
         }
     } else {

@@ -342,6 +342,7 @@ fn never_loop_expr<'tcx>(
                 combine_branches(e2, e3)
             })
         },
+        ExprKind::Await(e, _) => never_loop_expr(cx, e, local_labels, main_loop_id),
         ExprKind::Match(e, arms, _) => {
             let e = never_loop_expr(cx, e, local_labels, main_loop_id);
             combine_seq(e, || {
@@ -446,7 +447,7 @@ fn never_loop_expr<'tcx>(
             },
         })),
         ExprKind::OffsetOf(_, _)
-        | ExprKind::Yield(_, _)
+        | ExprKind::Yield(_)
         | ExprKind::Closure { .. }
         | ExprKind::Path(_)
         | ExprKind::ConstBlock(_)
@@ -518,6 +519,7 @@ fn find_non_obvious_spans<'tcx>(cx: &LateContext<'tcx>, e: &'tcx Expr<'tcx>) -> 
                 | ExprKind::Loop(..)
                 | ExprKind::Block(..)
                 | ExprKind::Match(..)
+                | ExprKind::Await(..)
                 | ExprKind::If(..) => {
                     return ControlFlow::Continue(Descend::Yes);
                 },

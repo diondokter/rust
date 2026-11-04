@@ -2,7 +2,7 @@ use clippy_utils::diagnostics::span_lint;
 use clippy_utils::macros::{MacroCall, find_assert_args, find_assert_eq_args, root_macro_call_first_node};
 use clippy_utils::sym;
 use rustc_hir::intravisit::{Visitor, walk_expr};
-use rustc_hir::{BorrowKind, Expr, ExprKind, MatchSource, Mutability};
+use rustc_hir::{BorrowKind, Expr, ExprKind, Mutability};
 use rustc_lint::{LateContext, LateLintPass, declare_lint_pass};
 use rustc_middle::hir::nested_filter;
 use rustc_middle::ty;
@@ -119,7 +119,7 @@ impl<'tcx> Visitor<'tcx> for MutArgVisitor<'_, 'tcx> {
                 }
             },
             // Don't check await desugars
-            ExprKind::Match(_, _, MatchSource::AwaitDesugar) => return,
+            ExprKind::Await(..) => return,
             _ if !self.found => self.expr_span = Some(expr.span),
             _ => return,
         }

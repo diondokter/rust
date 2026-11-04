@@ -379,6 +379,7 @@ impl<'v> hir_visit::Visitor<'v> for StatCollector<'v> {
                 Struct,
                 Repeat,
                 Yield,
+                Await,
                 UnsafeBinderCast,
                 Err
             ]

@@ -7,7 +7,7 @@ use rustc_hir::def::DefKind;
 use rustc_hir::intravisit::{FnKind, Visitor, walk_expr, walk_fn};
 use rustc_hir::{
     Body, Closure, ClosureKind, CoroutineDesugaring, CoroutineKind, Defaultness, Expr, ExprKind, FnDecl, HirId,
-    ImplItem, ImplItemKind, IsAsync, Node, TraitItem, YieldSource,
+    ImplItem, ImplItemKind, IsAsync, Node, TraitItem,
 };
 use rustc_lint::{LateContext, LateLintPass, impl_lint_pass};
 use rustc_middle::hir::nested_filter;
@@ -121,7 +121,7 @@ impl<'tcx> Visitor<'tcx> for AsyncFnVisitor<'_, 'tcx> {
     type NestedFilter = nested_filter::OnlyBodies;
 
     fn visit_expr(&mut self, ex: &'tcx Expr<'tcx>) {
-        if let ExprKind::Yield(_, YieldSource::Await { .. }) = ex.kind {
+        if let ExprKind::Await(..) = ex.kind {
             if self.async_depth == 1 {
                 self.found_await = true;
             } else if self.await_in_async_block.is_none() {

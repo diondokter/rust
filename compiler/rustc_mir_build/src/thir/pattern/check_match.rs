@@ -533,7 +533,7 @@ impl<'p, 'tcx> MatchVisitor<'p, 'tcx> {
             }
             // Unreachable patterns in try and await expressions occur when one of
             // the arms are an uninhabited type. Which is OK.
-            hir::MatchSource::AwaitDesugar | hir::MatchSource::TryDesugar(_) => {}
+            hir::MatchSource::TryDesugar(_) => {}
         }
 
         // Check if the match is exhaustive.
@@ -580,7 +580,6 @@ impl<'p, 'tcx> MatchVisitor<'p, 'tcx> {
                     }
                     hir::MatchSource::ForLoopDesugar
                     | hir::MatchSource::TryDesugar(_)
-                    | hir::MatchSource::AwaitDesugar
                     | hir::MatchSource::FormatArgs => None,
                 };
 

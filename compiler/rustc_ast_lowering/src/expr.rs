@@ -1003,12 +1003,21 @@ impl<'hir> LoweringContext<'_, 'hir> {
     }
 
     /// Takes an expr that has already been lowered and generates a desugared await loop around it
+    #[expect(unused, reason = "For during refactor")]
     fn make_lowered_await(
         &mut self,
         await_kw_span: Span,
         expr: &'hir hir::Expr<'hir>,
         await_kind: FutureKind,
     ) -> hir::ExprKind<'hir> {
+        return hir::ExprKind::Await(
+            expr,
+            match await_kind {
+                FutureKind::Future => hir::FutureKind::Future,
+                FutureKind::AsyncIterator => hir::FutureKind::AsyncIterator,
+            },
+        );
+
         let full_span = expr.span.to(await_kw_span);
 
         let is_async_gen = match self.coroutine_kind {
@@ -1134,7 +1143,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 span,
                 poll_expr,
                 arena_vec![self; ready_arm, pending_arm],
-                hir::MatchSource::AwaitDesugar,
+                unimplemented!(),
             );
             self.stmt_expr(span, match_expr)
         };
@@ -1151,7 +1160,9 @@ impl<'hir> LoweringContext<'_, 'hir> {
 
             let yield_expr = self.expr(
                 span,
-                hir::ExprKind::Yield(yielded, hir::YieldSource::Await { expr: Some(expr_hir_id) }),
+                hir::ExprKind::Yield(
+                    yielded, /*, hir::YieldSource::Await { expr: Some(expr_hir_id) }*/
+                ),
             );
             let yield_expr = self.arena.alloc(yield_expr);
 
@@ -1197,11 +1208,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
         // match <into_future_expr> {
         //     mut __awaitee => loop { .. }
         // }
-        hir::ExprKind::Match(
-            into_future_expr,
-            arena_vec![self; awaitee_arm],
-            hir::MatchSource::AwaitDesugar,
-        )
+        hir::ExprKind::Match(into_future_expr, arena_vec![self; awaitee_arm], unimplemented!())
     }
 
     fn lower_expr_use(&mut self, use_kw_span: Span, expr: &Expr) -> hir::ExprKind<'hir> {
@@ -1740,9 +1747,11 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 LangItem::AsyncGenReady,
                 std::slice::from_ref(yielded),
             );
-            let yield_expr = self.arena.alloc(
-                self.expr(span, hir::ExprKind::Yield(wrapped_yielded, hir::YieldSource::Yield)),
-            );
+            let yield_expr =
+                self.arena.alloc(self.expr(
+                    span,
+                    hir::ExprKind::Yield(wrapped_yielded /*, hir::YieldSource::Yield*/),
+                ));
 
             let Some(task_context_hid) = self.task_context else {
                 unreachable!("use of `await` outside of an async context.");
@@ -1752,7 +1761,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
 
             hir::ExprKind::Assign(lhs, yield_expr, self.lower_span(span))
         } else {
-            hir::ExprKind::Yield(yielded, hir::YieldSource::Yield)
+            hir::ExprKind::Yield(yielded /*, hir::YieldSource::Yield*/)
         }
     }
 

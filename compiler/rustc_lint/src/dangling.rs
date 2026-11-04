@@ -299,6 +299,9 @@ fn is_temporary_rvalue(expr: &Expr<'_>) -> bool {
         | ExprKind::Use(..)
         | ExprKind::Binary(..) => true,
 
+        // Awaits produce rvalues
+        ExprKind::Await(..) => true,
+
         // Inner blocks are rvalues.
         ExprKind::If(..) | ExprKind::Loop(..) | ExprKind::Match(..) | ExprKind::Block(..) => true,
 
