@@ -403,15 +403,35 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 self.check_expr_index(base, idx, expr, brackets_span)
             }
             ExprKind::Yield(value) => self.check_expr_yield(value, expr),
-            ExprKind::Await(expr, _) => {
-                // The await yields whatever future yields
-                todo!()
-            }
+            ExprKind::Await(expr, _) => self.check_expr_await(expr),
             ExprKind::UnsafeBinderCast(kind, inner_expr, ty) => {
                 self.check_expr_unsafe_binder_cast(expr.span, kind, inner_expr, ty, expected)
             }
             ExprKind::Err(guar) => Ty::new_error(tcx, guar),
         }
+    }
+
+    fn check_expr_await(&self, expr: &'tcx hir::Expr<'tcx>) -> Ty<'tcx> {
+        // The await yields whatever Future::Output yields
+        // So first get the type that implements Future
+        let fut = self.check_expr(expr);
+
+        let future_trait_def_id = self.tcx.require_lang_item(LangItem::Future, expr.span);
+        let output_def_id = self
+            .tcx
+            .associated_item_def_ids(future_trait_def_id)
+            .iter()
+            .copied()
+            .find(|&def_id| self.tcx.item_name(def_id) == sym::Output)
+            .expect("Future trait missing Output item");
+
+        // Project to <fut as Future>::Output
+        let projection_ty = Ty::new_projection(self.tcx, ty::IsRigid::No, output_def_id, [fut]);
+
+        self.tcx.normalize_erasing_regions(
+            self.typing_env(self.param_env),
+            Unnormalized::new(projection_ty),
+        )
     }
 
     fn check_expr_unop(
