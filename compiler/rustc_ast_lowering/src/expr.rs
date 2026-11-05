@@ -1043,20 +1043,34 @@ impl<'hir> LoweringContext<'_, 'hir> {
             }
         };
 
+        let features = match await_kind {
+            FutureKind::Future if is_async_gen => Some(Arc::clone(&crate::ALLOW_ASYNC_GEN)),
+            FutureKind::Future => None,
+            FutureKind::AsyncIterator => Some(Arc::clone(&crate::ALLOW_FOR_AWAIT)),
+        };
+
+        let span = self.mark_span_with_reason(DesugaringKind::Await, await_kw_span, features);
+
+        // `::std::future::IntoFuture::into_future(<expr>)`
+        let into_future_expr = match await_kind {
+            FutureKind::Future => self.expr_call_lang_item_fn(
+                span,
+                LangItem::IntoFutureIntoFuture,
+                arena_vec![self; *expr],
+            ),
+            // Not needed for `for await` because we expect to have already called
+            // `IntoAsyncIterator::into_async_iter` on it.
+            FutureKind::AsyncIterator => expr,
+        };
+
         return hir::ExprKind::Await(
-            expr,
+            into_future_expr,
             match await_kind {
                 FutureKind::Future => hir::FutureKind::Future,
                 FutureKind::AsyncIterator => hir::FutureKind::AsyncIterator,
             },
         );
 
-        let features = match await_kind {
-            FutureKind::Future if is_async_gen => Some(Arc::clone(&crate::ALLOW_ASYNC_GEN)),
-            FutureKind::Future => None,
-            FutureKind::AsyncIterator => Some(Arc::clone(&crate::ALLOW_FOR_AWAIT)),
-        };
-        let span = self.mark_span_with_reason(DesugaringKind::Await, await_kw_span, features);
         let gen_future_span = self.mark_span_with_reason(
             DesugaringKind::Await,
             full_span,
@@ -1192,18 +1206,6 @@ impl<'hir> LoweringContext<'_, 'hir> {
 
         // mut __awaitee => loop { ... }
         let awaitee_arm = self.arm(awaitee_pat, loop_expr, span);
-
-        // `match ::std::future::IntoFuture::into_future(<expr>) { ... }`
-        let into_future_expr = match await_kind {
-            FutureKind::Future => self.expr_call_lang_item_fn(
-                span,
-                LangItem::IntoFutureIntoFuture,
-                arena_vec![self; *expr],
-            ),
-            // Not needed for `for await` because we expect to have already called
-            // `IntoAsyncIterator::into_async_iter` on it.
-            FutureKind::AsyncIterator => expr,
-        };
 
         // match <into_future_expr> {
         //     mut __awaitee => loop { .. }
