@@ -887,7 +887,78 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
 
             ExprKind::Await { value, kind } => {
                 // @Dion: Do we desugar here?
-                todo!()
+
+                let expr_span = this.thir[expr_id].span;
+
+                // Get the future operand
+                let future = unpack!(block = this.as_place(block, value));
+                let future_ty = future.ty(&this.local_decls, this.tcx).ty;
+                // Take a reference to the future
+                let future_ref = this.temp(
+                    // @Dion: Cleanup
+                    Ty::new_mut_ref(
+                        this.tcx,
+                        this.tcx.lifetimes.re_erased,
+                        future_ty,
+                    ),
+                    expr_span,
+                );
+                this.cfg.push_assign(
+                    block,
+                    source_info,
+                    future_ref,
+                    Rvalue::Ref(
+                        this.tcx.lifetimes.re_erased,
+                        BorrowKind::Mut { kind: MutBorrowKind::Default },
+                        future,
+                    ),
+                );
+
+                // Pin it
+                let future_pin = this.temp(
+                    // @Dion: Cleanup
+                    Ty::new_pinned_ref(
+                        this.tcx,
+                        this.tcx.lifetimes.re_erased,
+                        future_ty,
+                        Mutability::Mut,
+                    ),
+                    expr_span,
+                );
+
+                let resume = this.cfg.start_new_block();
+                this.cfg.terminate(
+                    block,
+                    source_info,
+                    TerminatorKind::Call {
+                        func: Operand::function_handle(
+                            this.tcx,
+                            this.tcx.require_lang_item(LangItem::PinNewUnchecked, source_info.span),
+                            &[future_ref.ty(&this.local_decls, this.tcx).ty.into()],
+                            source_info.span,
+                        ),
+                        args: vec![rustc_span::respan(source_info.span, Operand::Move(future_ref))]
+                            .into_boxed_slice(),
+                        destination: future_pin,
+                        target: Some(resume),
+                        unwind: UnwindAction::Continue,
+                        call_source: CallSource::Misc,
+                        fn_span: source_info.span,
+                    },
+                );
+                block = resume;
+
+                // TODO:
+                // - get context `cx`
+                // - poll on pinned future and cx
+                // - switch on poll enum
+                // - if pending
+                //  - yield
+                //  - resume to pin new unchecked
+                // - else
+                //  - unpack ready and move data into `destination`
+
+                block.unit()
             }
 
             // these are the cases that are more naturally handled by some other mode
