@@ -8,7 +8,8 @@ use rustc_data_structures::thin_vec::ThinVec;
 use rustc_hir as hir;
 use rustc_middle::mir::*;
 use rustc_middle::thir::*;
-use rustc_middle::ty::{self, CanonicalUserTypeAnnotation, Ty};
+use rustc_middle::ty::inherent::Ty as _;
+use rustc_middle::ty::{self, CanonicalUserTypeAnnotation, Ty, Unnormalized};
 use rustc_span::{DUMMY_SP, Spanned, span_bug, sym};
 use rustc_trait_selection::infer::InferCtxtExt;
 use tracing::{debug, instrument};
@@ -886,22 +887,27 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             }
 
             ExprKind::Await { value, kind } => {
-                // @Dion: Do we desugar here?
-
-                let expr_span = this.thir[expr_id].span;
+                // @Dion: TODO cleanup of temps
 
                 // Get the future operand
                 let future = unpack!(block = this.as_place(block, value));
                 let future_ty = future.ty(&this.local_decls, this.tcx).ty;
+
+                // Project to <fut as Future>::Output
+                let projection_ty = Ty::new_projection(
+                    this.tcx,
+                    ty::IsRigid::No,
+                    this.tcx.require_lang_item(LangItem::FutureOutput, expr.span),
+                    [future_ty],
+                );
+                let future_output_ty = this
+                    .tcx
+                    .normalize_erasing_regions(this.typing_env(), Unnormalized::new(projection_ty));
+
                 // Take a reference to the future
                 let future_ref = this.temp(
-                    // @Dion: Cleanup
-                    Ty::new_mut_ref(
-                        this.tcx,
-                        this.tcx.lifetimes.re_erased,
-                        future_ty,
-                    ),
-                    expr_span,
+                    Ty::new_mut_ref(this.tcx, this.tcx.lifetimes.re_erased, future_ty),
+                    source_info.span,
                 );
                 this.cfg.push_assign(
                     block,
@@ -916,14 +922,13 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
 
                 // Pin it
                 let future_pin = this.temp(
-                    // @Dion: Cleanup
                     Ty::new_pinned_ref(
                         this.tcx,
                         this.tcx.lifetimes.re_erased,
                         future_ty,
                         Mutability::Mut,
                     ),
-                    expr_span,
+                    source_info.span,
                 );
 
                 let resume = this.cfg.start_new_block();
@@ -941,17 +946,126 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                             .into_boxed_slice(),
                         destination: future_pin,
                         target: Some(resume),
-                        unwind: UnwindAction::Continue,
+                        unwind: UnwindAction::Continue, // TODO: Fix
+                        call_source: CallSource::Misc,
+                        fn_span: source_info.span,
+                    },
+                );
+                let pin_block = block;
+                block = resume;
+
+                // Get context `cx`
+                let context_mut_ref = Ty::new_task_context(this.tcx); // &mut Context<'_>
+                let cx = this.temp(context_mut_ref, source_info.span);
+
+                let resume_ty_arg = Place::from(Local::arg(1));
+
+                let resume = this.cfg.start_new_block();
+                this.cfg.terminate(
+                    block,
+                    source_info,
+                    TerminatorKind::Call {
+                        func: Operand::function_handle(
+                            this.tcx,
+                            this.tcx.require_lang_item(LangItem::GetContext, source_info.span),
+                            &[
+                                this.tcx.lifetimes.re_erased.into(),
+                                this.tcx.lifetimes.re_erased.into(),
+                            ],
+                            source_info.span,
+                        ),
+                        args: vec![rustc_span::respan(
+                            source_info.span,
+                            Operand::Copy(resume_ty_arg),
+                        )]
+                        .into_boxed_slice(),
+                        destination: cx,
+                        target: Some(resume),
+                        unwind: UnwindAction::Continue, // TODO: Fix
                         call_source: CallSource::Misc,
                         fn_span: source_info.span,
                     },
                 );
                 block = resume;
 
+                // Poll on pinned future and cx
+
+                let poll_did = this.tcx.require_lang_item(LangItem::Poll, DUMMY_SP);
+                let poll_adt_ref = this.tcx.adt_def(poll_did);
+                let poll_args = this.tcx.mk_args(&[future_output_ty.into()]);
+                let poll_ty = Ty::new_adt(this.tcx, poll_adt_ref, poll_args);
+                let poll_place = this.temp(poll_ty, source_info.span);
+
+                let resume = this.cfg.start_new_block();
+                this.cfg.terminate(
+                    block,
+                    source_info,
+                    TerminatorKind::Call {
+                        func: Operand::function_handle(
+                            this.tcx,
+                            this.tcx.require_lang_item(LangItem::FuturePoll, source_info.span),
+                            &[future_ref.ty(&this.local_decls, this.tcx).ty.into()],
+                            source_info.span,
+                        ),
+                        args: vec![
+                            rustc_span::respan(source_info.span, Operand::Move(future_pin)),
+                            rustc_span::respan(source_info.span, Operand::Move(cx)),
+                        ]
+                        .into_boxed_slice(),
+                        destination: poll_place,
+                        target: Some(resume),
+                        unwind: UnwindAction::Continue, // TODO: Fix
+                        call_source: CallSource::Misc,
+                        fn_span: source_info.span,
+                    },
+                );
+                block = resume;
+
+                // Get poll discriminant
+
+                let discriminant_ty = poll_ty.discriminant_ty(this.tcx);
+                let discriminant_place = this.temp(discriminant_ty, source_info.span);
+                this.cfg.push_assign(
+                    block,
+                    source_info,
+                    discriminant_place,
+                    Rvalue::Discriminant(poll_place),
+                );
+
+                // Switch on the dicriminant
+
+                let pending_block = this.cfg.start_new_block();
+                let ready_block = this.cfg.start_new_block();
+                let otherwise_block = this.cfg.start_new_block();
+                this.cfg.terminate(
+                    block,
+                    source_info,
+                    TerminatorKind::SwitchInt {
+                        discr: Operand::Move(discriminant_place),
+                        targets: SwitchTargets::new(
+                            [(0, ready_block), (1, pending_block)].into_iter(),
+                            otherwise_block,
+                        ),
+                    },
+                );
+                block = ready_block;
+
+                this.cfg.terminate(otherwise_block, source_info, TerminatorKind::Unreachable);
+                this.cfg.terminate(
+                    pending_block,
+                    source_info,
+                    TerminatorKind::Yield {
+                        value: Operand::zero_sized_constant(
+                            Ty::new_unit(this.tcx),
+                            source_info.span,
+                        ),
+                        resume: pin_block,
+                        resume_arg: (),
+                        drop: (),
+                    },
+                );
+
                 // TODO:
-                // - get context `cx`
-                // - poll on pinned future and cx
-                // - switch on poll enum
                 // - if pending
                 //  - yield
                 //  - resume to pin new unchecked
