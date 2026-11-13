@@ -416,14 +416,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         // So first get the type that implements Future
         let fut = self.check_expr(expr);
 
-        let future_trait_def_id = self.tcx.require_lang_item(LangItem::Future, expr.span);
-        let output_def_id = self
-            .tcx
-            .associated_item_def_ids(future_trait_def_id)
-            .iter()
-            .copied()
-            .find(|&def_id| self.tcx.item_name(def_id) == sym::Output)
-            .expect("Future trait missing Output item");
+        let output_def_id = self.tcx.require_lang_item(LangItem::FutureOutput, expr.span);
 
         // Project to <fut as Future>::Output
         let projection_ty = Ty::new_projection(self.tcx, ty::IsRigid::No, output_def_id, [fut]);
