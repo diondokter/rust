@@ -421,10 +421,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         // Project to <fut as Future>::Output
         let projection_ty = Ty::new_projection(self.tcx, ty::IsRigid::No, output_def_id, [fut]);
 
-        self.tcx.normalize_erasing_regions(
-            self.typing_env(self.param_env),
-            Unnormalized::new(projection_ty),
-        )
+        self.normalize(expr.span, Unnormalized::new(projection_ty))
     }
 
     fn check_expr_unop(
