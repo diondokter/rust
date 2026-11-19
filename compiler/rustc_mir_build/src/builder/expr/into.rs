@@ -942,6 +942,31 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         block_and
     }
 
+    /// Desugar the await
+    ///
+    /// ```ignore (pseudo-rust)
+    /// // 1
+    /// let awaitee = <value>;
+    /// // 2
+    /// loop {
+    ///     // 3
+    ///     let awaitee_ref = &mut awaitee;
+    ///     let awaitee_pin = <::std::pin::Pin>::new_unchecked(awaitee_ref);
+    ///     // 4
+    ///     let cx = ::std::future::get_context(task_context);
+    ///     // 5
+    ///     let poll = ::std::future::Future::poll(awaitee_pin, cx);
+    ///     // 6
+    ///     match poll {
+    ///         // 7
+    ///         ready => break ready.0,
+    ///         // 8
+    ///         pending => yield (),
+    ///         // 9
+    ///         _ => unreachable,
+    ///     }
+    /// }
+    /// ```
     fn await_desugar(
         &mut self,
         destination: Place<'tcx>,
@@ -954,51 +979,64 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         let expr_span = expr.span;
         let source_info = this.source_info(expr_span);
 
-        // @Dion: TODO cleanup of temps
+        // 1: Get the future operand
+        let awaitee = unpack!(block = this.as_place(block, value));
 
-        // Get the future operand
-        let future = unpack!(block = this.as_place(block, value));
-        let future_ty = future.ty(&this.local_decls, this.tcx).ty;
-
-        // Project to <fut as Future>::Output
-        let projection_ty = Ty::new_projection(
+        // Collect all the types we'll need
+        let future_ty = awaitee.ty(&this.local_decls, this.tcx).ty;
+        let future_output_projection_ty = Ty::new_projection(
             this.tcx,
             ty::IsRigid::No,
             this.tcx.require_lang_item(LangItem::FutureOutput, expr.span),
             [future_ty],
         );
-        let future_output_ty =
-            this.tcx.normalize_erasing_regions(this.typing_env(), Unnormalized::new(projection_ty));
+        let future_output_ty = this.tcx.normalize_erasing_regions(
+            this.typing_env(),
+            Unnormalized::new(future_output_projection_ty),
+        );
+        let context_mut_ref_ty = Ty::new_task_context(this.tcx); // &mut Context<'_>
+        let poll_did = this.tcx.require_lang_item(LangItem::Poll, DUMMY_SP);
+        let poll_adt_def = this.tcx.adt_def(poll_did);
+        let poll_args = this.tcx.mk_args(&[future_output_ty.into()]);
+        let poll_ty = Ty::new_adt(this.tcx, poll_adt_def, poll_args);
+        let discriminant_ty = poll_ty.discriminant_ty(this.tcx);
 
-        // Take a reference to the future
-        let future_ref = this.temp(
+        // 2: Construct the poll loop
+        let loop_block = block;
+        let loop_scope = this.local_scope();
+        this.push_scope(loop_scope);
+
+        // 3: Take ref and pin
+        let awaitee_ref = this.temp(
             Ty::new_mut_ref(this.tcx, this.tcx.lifetimes.re_erased, future_ty),
             source_info.span,
         );
-        this.cfg
-            .push(block, Statement::new(source_info, StatementKind::StorageLive(future_ref.local)));
-        this.schedule_drop_storage(source_info.span, this.local_scope(), future_ref.local);
-        this.cfg.push_assign(
-            block,
-            source_info,
-            future_ref,
-            Rvalue::Ref(
-                this.tcx.lifetimes.re_erased,
-                BorrowKind::Mut { kind: MutBorrowKind::Default },
-                future,
-            ),
-        );
-
-        // Pin it
-        let future_pin = this.temp(
+        let awaitee_pin = this.temp(
             Ty::new_pinned_ref(this.tcx, this.tcx.lifetimes.re_erased, future_ty, Mutability::Mut),
             source_info.span,
         );
-        this.cfg
-            .push(block, Statement::new(source_info, StatementKind::StorageLive(future_pin.local)));
-        this.schedule_drop_storage(source_info.span, this.local_scope(), future_pin.local);
+        this.cfg.push(
+            block,
+            Statement::new(source_info, StatementKind::StorageLive(awaitee_ref.local)),
+        );
+        this.cfg.push(
+            block,
+            Statement::new(source_info, StatementKind::StorageLive(awaitee_pin.local)),
+        );
+        this.schedule_drop_storage(source_info.span, this.local_scope(), awaitee_ref.local);
+        this.schedule_drop_storage(source_info.span, this.local_scope(), awaitee_pin.local);
 
-        let resume = this.cfg.start_new_block();
+        this.cfg.push_assign(
+            block,
+            source_info,
+            awaitee_ref,
+            Rvalue::Ref(
+                this.tcx.lifetimes.re_erased,
+                BorrowKind::Mut { kind: MutBorrowKind::Default },
+                awaitee,
+            ),
+        );
+        let target = this.cfg.start_new_block();
         this.cfg.terminate(
             block,
             source_info,
@@ -1006,30 +1044,28 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 func: Operand::function_handle(
                     this.tcx,
                     this.tcx.require_lang_item(LangItem::PinNewUnchecked, source_info.span),
-                    &[future_ref.ty(&this.local_decls, this.tcx).ty.into()],
+                    &[awaitee_ref.ty(&this.local_decls, this.tcx).ty.into()],
                     source_info.span,
                 ),
-                args: vec![rustc_span::respan(source_info.span, Operand::Move(future_ref))]
+                args: vec![rustc_span::respan(source_info.span, Operand::Move(awaitee_ref))]
                     .into_boxed_slice(),
-                destination: future_pin,
-                target: Some(resume),
-                unwind: UnwindAction::Continue, // TODO: Fix
+                destination: awaitee_pin,
+                target: Some(target),
+                unwind: UnwindAction::Continue,
                 call_source: CallSource::Misc,
                 fn_span: source_info.span,
             },
         );
-        let pin_block = block;
-        block = resume;
+        block = target;
 
-        // Get context `cx`
-        let context_mut_ref = Ty::new_task_context(this.tcx); // &mut Context<'_>
-        let cx = this.temp(context_mut_ref, source_info.span);
+        // 4: Get context `cx`
+        let cx = this.temp(context_mut_ref_ty, source_info.span);
         this.cfg.push(block, Statement::new(source_info, StatementKind::StorageLive(cx.local)));
         this.schedule_drop_value(source_info.span, this.local_scope(), cx.local);
 
         let resume_ty_arg = Place::from(Local::arg(1));
 
-        let resume = this.cfg.start_new_block();
+        let target = this.cfg.start_new_block();
         this.cfg.terminate(
             block,
             source_info,
@@ -1043,26 +1079,21 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 args: vec![rustc_span::respan(source_info.span, Operand::Copy(resume_ty_arg))]
                     .into_boxed_slice(),
                 destination: cx,
-                target: Some(resume),
-                unwind: UnwindAction::Continue, // TODO: Fix
+                target: Some(target),
+                unwind: UnwindAction::Continue,
                 call_source: CallSource::Misc,
                 fn_span: source_info.span,
             },
         );
-        block = resume;
+        block = target;
 
-        // Poll on pinned future and cx
-
-        let poll_did = this.tcx.require_lang_item(LangItem::Poll, DUMMY_SP);
-        let poll_adt_def = this.tcx.adt_def(poll_did);
-        let poll_args = this.tcx.mk_args(&[future_output_ty.into()]);
-        let poll_ty = Ty::new_adt(this.tcx, poll_adt_def, poll_args);
+        // 5: Poll on pinned awaitee and cx
         let poll_place = this.temp(poll_ty, source_info.span);
         this.cfg
             .push(block, Statement::new(source_info, StatementKind::StorageLive(poll_place.local)));
         this.schedule_drop_value(source_info.span, this.local_scope(), poll_place.local);
 
-        let resume = this.cfg.start_new_block();
+        let target = this.cfg.start_new_block();
         this.cfg.terminate(
             block,
             source_info,
@@ -1070,26 +1101,24 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 func: Operand::function_handle(
                     this.tcx,
                     this.tcx.require_lang_item(LangItem::FuturePoll, source_info.span),
-                    &[future_ref.ty(&this.local_decls, this.tcx).ty.into()],
+                    &[awaitee_ref.ty(&this.local_decls, this.tcx).ty.into()],
                     source_info.span,
                 ),
                 args: vec![
-                    rustc_span::respan(source_info.span, Operand::Move(future_pin)),
+                    rustc_span::respan(source_info.span, Operand::Move(awaitee_pin)),
                     rustc_span::respan(source_info.span, Operand::Move(cx)),
                 ]
                 .into_boxed_slice(),
                 destination: poll_place,
-                target: Some(resume),
-                unwind: UnwindAction::Continue, // TODO: Fix
+                target: Some(target),
+                unwind: UnwindAction::Continue,
                 call_source: CallSource::Misc,
                 fn_span: source_info.span,
             },
         );
-        block = resume;
+        block = target;
 
-        // Get poll discriminant
-
-        let discriminant_ty = poll_ty.discriminant_ty(this.tcx);
+        // 6: Get poll discriminant and switch on it
         let discriminant_place = this.temp(discriminant_ty, source_info.span);
         this.cfg.push_assign(
             block,
@@ -1103,10 +1132,8 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         );
         this.schedule_drop_value(source_info.span, this.local_scope(), discriminant_place.local);
 
-        // Switch on the dicriminant
-
-        let pending_block = this.cfg.start_new_block();
         let ready_block = this.cfg.start_new_block();
+        let mut pending_block = this.cfg.start_new_block();
         let otherwise_block = this.cfg.start_new_block();
         this.cfg.terminate(
             block,
@@ -1120,21 +1147,8 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             },
         );
 
-        // Not pending or ready:
-        this.cfg.terminate(otherwise_block, source_info, TerminatorKind::Unreachable);
-        // Pending:
-        this.cfg.terminate(
-            pending_block,
-            source_info,
-            TerminatorKind::Yield {
-                value: Operand::zero_sized_constant(this.tcx.types.unit, source_info.span),
-                resume: pin_block,
-                resume_arg: resume_ty_arg,
-                drop: None, // TODO: cleanup
-            },
-        );
-        // Ready:
-        let resume = this.cfg.start_new_block();
+        // 7: Ready
+        let resume_after_ready = this.cfg.start_new_block();
         let ready_idx = poll_adt_def
             .variant_index_with_id(this.tcx.require_lang_item(LangItem::PollReady, DUMMY_SP));
         let ready_place = this.tcx.mk_place_downcast(poll_place, poll_adt_def, ready_idx);
@@ -1150,15 +1164,32 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             ready_block,
             source_info,
             TerminatorKind::Drop {
-                place: future,
-                target: resume,
-                unwind: UnwindAction::Continue, // TODO
+                place: awaitee,
+                target: resume_after_ready,
+                unwind: UnwindAction::Continue,
                 replace: false,
                 drop: None,
             },
         );
 
-        resume.unit()
+        // 8: Pending:
+        let _ = unpack!(pending_block = this.pop_scope(loop_scope, pending_block));
+        this.cfg.terminate(
+            pending_block,
+            source_info,
+            TerminatorKind::Yield {
+                value: Operand::zero_sized_constant(this.tcx.types.unit, source_info.span),
+                resume: loop_block,
+                resume_arg: resume_ty_arg,
+                drop: None,
+            },
+        );
+        this.coroutine_drop_cleanup(pending_block);
+
+        // 9: Not pending or ready, so unreachable
+        this.cfg.terminate(otherwise_block, source_info, TerminatorKind::Unreachable);
+
+        resume_after_ready.unit()
     }
 
     fn is_let(&self, expr: ExprId) -> bool {
