@@ -983,17 +983,20 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         let awaitee = unpack!(block = this.as_place(block, value));
 
         // Collect all the types we'll need
-        let future_ty = awaitee.ty(&this.local_decls, this.tcx).ty;
+        let awaitee_ty = awaitee.ty(&this.local_decls, this.tcx).ty;
         let future_output_projection_ty = Ty::new_projection(
             this.tcx,
             ty::IsRigid::No,
             this.tcx.require_lang_item(LangItem::FutureOutput, expr.span),
-            [future_ty],
+            [awaitee_ty],
         );
         let future_output_ty = this.tcx.normalize_erasing_regions(
             this.typing_env(),
             Unnormalized::new(future_output_projection_ty),
         );
+        let awaitee_ref_ty = Ty::new_mut_ref(this.tcx, this.tcx.lifetimes.re_erased, awaitee_ty);
+        let awaitee_pin_ty =
+            Ty::new_pinned_ref(this.tcx, this.tcx.lifetimes.re_erased, awaitee_ty, Mutability::Mut);
         let context_mut_ref_ty = Ty::new_task_context(this.tcx); // &mut Context<'_>
         let poll_did = this.tcx.require_lang_item(LangItem::Poll, DUMMY_SP);
         let poll_adt_def = this.tcx.adt_def(poll_did);
@@ -1007,14 +1010,8 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         this.push_scope(loop_scope);
 
         // 3: Take ref and pin
-        let awaitee_ref = this.temp(
-            Ty::new_mut_ref(this.tcx, this.tcx.lifetimes.re_erased, future_ty),
-            source_info.span,
-        );
-        let awaitee_pin = this.temp(
-            Ty::new_pinned_ref(this.tcx, this.tcx.lifetimes.re_erased, future_ty, Mutability::Mut),
-            source_info.span,
-        );
+        let awaitee_ref = this.temp(awaitee_ref_ty, source_info.span);
+        let awaitee_pin = this.temp(awaitee_pin_ty, source_info.span);
         this.cfg.push(
             block,
             Statement::new(source_info, StatementKind::StorageLive(awaitee_ref.local)),
@@ -1044,7 +1041,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 func: Operand::function_handle(
                     this.tcx,
                     this.tcx.require_lang_item(LangItem::PinNewUnchecked, source_info.span),
-                    &[awaitee_ref.ty(&this.local_decls, this.tcx).ty.into()],
+                    &[awaitee_ref_ty.into()],
                     source_info.span,
                 ),
                 args: vec![rustc_span::respan(source_info.span, Operand::Move(awaitee_ref))]
@@ -1101,7 +1098,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 func: Operand::function_handle(
                     this.tcx,
                     this.tcx.require_lang_item(LangItem::FuturePoll, source_info.span),
-                    &[awaitee_ref.ty(&this.local_decls, this.tcx).ty.into()],
+                    &[awaitee_ty.into()],
                     source_info.span,
                 ),
                 args: vec![
