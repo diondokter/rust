@@ -8,7 +8,6 @@ use rustc_data_structures::thin_vec::ThinVec;
 use rustc_hir as hir;
 use rustc_middle::mir::*;
 use rustc_middle::thir::*;
-use rustc_middle::ty::inherent::Ty as _;
 use rustc_middle::ty::{self, CanonicalUserTypeAnnotation, Ty, Unnormalized};
 use rustc_span::{DUMMY_SP, Spanned, span_bug, sym};
 use rustc_trait_selection::infer::InferCtxtExt;
@@ -991,9 +990,9 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 // Poll on pinned future and cx
 
                 let poll_did = this.tcx.require_lang_item(LangItem::Poll, DUMMY_SP);
-                let poll_adt_ref = this.tcx.adt_def(poll_did);
+                let poll_adt_def = this.tcx.adt_def(poll_did);
                 let poll_args = this.tcx.mk_args(&[future_output_ty.into()]);
-                let poll_ty = Ty::new_adt(this.tcx, poll_adt_ref, poll_args);
+                let poll_ty = Ty::new_adt(this.tcx, poll_adt_def, poll_args);
                 let poll_place = this.temp(poll_ty, source_info.span);
 
                 let resume = this.cfg.start_new_block();
@@ -1048,31 +1047,47 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                         ),
                     },
                 );
-                block = ready_block;
 
+                // Not pending or ready:
                 this.cfg.terminate(otherwise_block, source_info, TerminatorKind::Unreachable);
+                // Pending:
                 this.cfg.terminate(
                     pending_block,
                     source_info,
                     TerminatorKind::Yield {
-                        value: Operand::zero_sized_constant(
-                            Ty::new_unit(this.tcx),
-                            source_info.span,
-                        ),
+                        value: Operand::zero_sized_constant(this.tcx.types.unit, source_info.span),
                         resume: pin_block,
-                        resume_arg: (),
-                        drop: (),
+                        resume_arg: resume_ty_arg,
+                        drop: None, // TODO: cleanup
+                    },
+                );
+                // Ready:
+                let resume = this.cfg.start_new_block();
+                let ready_idx = poll_adt_def.variant_index_with_id(
+                    this.tcx.require_lang_item(LangItem::PollReady, DUMMY_SP),
+                );
+                let ready_place = this.tcx.mk_place_downcast(poll_place, poll_adt_def, ready_idx);
+                let ready_val_place =
+                    this.tcx.mk_place_field(ready_place, FieldIdx::ZERO, future_output_ty);
+                this.cfg.push_assign(
+                    ready_block,
+                    source_info,
+                    destination,
+                    Rvalue::Use(Operand::Move(ready_val_place), WithRetag::Yes),
+                );
+                this.cfg.terminate(
+                    ready_block,
+                    source_info,
+                    TerminatorKind::Drop {
+                        place: future,
+                        target: resume,
+                        unwind: UnwindAction::Continue, // TODO
+                        replace: false,
+                        drop: None,
                     },
                 );
 
-                // TODO:
-                // - if pending
-                //  - yield
-                //  - resume to pin new unchecked
-                // - else
-                //  - unpack ready and move data into `destination`
-
-                block.unit()
+                resume.unit()
             }
 
             // these are the cases that are more naturally handled by some other mode
