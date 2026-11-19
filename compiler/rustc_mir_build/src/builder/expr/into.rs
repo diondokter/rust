@@ -981,6 +981,16 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
 
         // 1: Get the future operand
         let awaitee = unpack!(block = this.as_place(block, value));
+        // Note that the name of this binding must not be changed to something else because
+        // debuggers and debugger extensions expect it to be called `__awaitee`. They use
+        // this name to identify what is being awaited by a suspended async functions.
+        this.var_debug_info.push(VarDebugInfo {
+            name: sym::__awaitee,
+            source_info,
+            composite: None,
+            value: VarDebugInfoContents::Place(awaitee),
+            argument_index: None,
+        });
 
         // Collect all the types we'll need
         let awaitee_ty = awaitee.ty(&this.local_decls, this.tcx).ty;
