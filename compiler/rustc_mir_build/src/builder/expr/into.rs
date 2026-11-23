@@ -1127,15 +1127,15 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
 
         // 6: Get poll discriminant and switch on it
         let discriminant_place = this.temp(discriminant_ty, source_info.span);
+        this.cfg.push(
+            block,
+            Statement::new(source_info, StatementKind::StorageLive(discriminant_place.local)),
+        );
         this.cfg.push_assign(
             block,
             source_info,
             discriminant_place,
             Rvalue::Discriminant(poll_place),
-        );
-        this.cfg.push(
-            block,
-            Statement::new(source_info, StatementKind::StorageLive(discriminant_place.local)),
         );
         this.schedule_drop_value(source_info.span, this.local_scope(), discriminant_place.local);
 
@@ -1155,7 +1155,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         );
 
         // 7: Ready
-        let resume_after_ready = this.cfg.start_new_block();
+        let mut resume_after_ready = this.cfg.start_new_block();
         let ready_idx = poll_adt_def
             .variant_index_with_id(this.tcx.require_lang_item(LangItem::PollReady, DUMMY_SP));
         let ready_place = this.tcx.mk_place_downcast(poll_place, poll_adt_def, ready_idx);
@@ -1178,6 +1178,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 drop: None,
             },
         );
+        let _ = unpack!(resume_after_ready = this.exit_scope(loop_scope, resume_after_ready));
 
         // 8: Pending:
         let _ = unpack!(pending_block = this.pop_scope(loop_scope, pending_block));

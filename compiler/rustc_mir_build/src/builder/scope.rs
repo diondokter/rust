@@ -741,6 +741,22 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         block.unit()
     }
 
+    /// Exits a scope without popping it, which should have region scope `region_scope`,
+    /// adding any drops onto the end of `block` that are needed.
+    /// This is not a replacement of `pop_scope`, but can be used if multiple exit points are present.
+    pub(crate) fn exit_scope(
+        &mut self,
+        region_scope: region::Scope,
+        mut block: BasicBlock,
+    ) -> BlockAnd<()> {
+        debug!("exit_scope({:?}, {:?})", region_scope, block);
+
+        assert_eq!(self.scopes.topmost(), region_scope);
+        block = self.leave_top_scope(block);
+
+        block.unit()
+    }
+
     /// Sets up the drops for breaking from `block` to `target`.
     pub(crate) fn break_scope(
         &mut self,
