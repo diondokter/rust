@@ -111,7 +111,7 @@ async fn mixed_sizes() {
 
 fn main() {
     assert_eq!(1025, std::mem::size_of_val(&single()));
-    assert_eq!(1026, std::mem::size_of_val(&single_with_noop()));
+    assert_eq!(1025, std::mem::size_of_val(&single_with_noop()));
     assert_eq!(3076, std::mem::size_of_val(&joined()));
     assert_eq!(3076, std::mem::size_of_val(&joined_with_noop()));
     assert_eq!(6157, std::mem::size_of_val(&mixed_sizes()));
