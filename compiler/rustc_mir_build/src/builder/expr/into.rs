@@ -981,6 +981,9 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
 
         // 1: Get the future operand
         let awaitee = unpack!(block = this.as_place(block, value));
+        this.schedule_drop_value(source_info.span, this.local_scope(), awaitee.local);
+        this.schedule_drop_storage(source_info.span, this.local_scope(), awaitee.local);
+
         // Note that the name of this binding must not be changed to something else because
         // debuggers and debugger extensions expect it to be called `__awaitee`. They use
         // this name to identify what is being awaited by a suspended async functions.
@@ -1170,12 +1173,9 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         this.cfg.terminate(
             ready_block,
             source_info,
-            TerminatorKind::Drop {
-                place: awaitee,
+            TerminatorKind::Goto {
                 target: resume_after_ready,
-                unwind: UnwindAction::Continue,
-                replace: false,
-                drop: None,
+                loop_hint_attrs: Default::default(),
             },
         );
         let _ = unpack!(resume_after_ready = this.exit_scope(loop_scope, resume_after_ready));
