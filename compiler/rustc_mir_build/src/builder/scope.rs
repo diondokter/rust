@@ -1513,6 +1513,19 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         self.schedule_drop(span, region_scope, local, DropKind::Value);
     }
 
+    /// Indicates that `place` should be dropped on exit from `region_scope` and then be marked `StorageDead` on exit from `region_scope`.
+    ///
+    /// `place` must not be the return place, or a function parameter.
+    pub(crate) fn schedule_drop_storage_value(
+        &mut self,
+        span: Span,
+        region_scope: region::Scope,
+        local: Local,
+    ) {
+        self.schedule_drop_storage(span, region_scope, local);
+        self.schedule_drop_value(span, region_scope, local);
+    }
+
     /// Schedule emission of a backwards incompatible drop lint hint.
     /// Applicable only to temporary values for now.
     #[instrument(level = "debug", skip(self))]

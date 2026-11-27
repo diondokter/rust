@@ -981,8 +981,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
 
         // 1: Get the future operand
         let awaitee = unpack!(block = this.as_place(block, value));
-        this.schedule_drop_value(source_info.span, this.local_scope(), awaitee.local);
-        this.schedule_drop_storage(source_info.span, this.local_scope(), awaitee.local);
+        this.schedule_drop_storage_value(source_info.span, this.local_scope(), awaitee.local);
 
         // Note that the name of this binding must not be changed to something else because
         // debuggers and debugger extensions expect it to be called `__awaitee`. They use
@@ -1071,7 +1070,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         // 4: Get context `cx`
         let cx = this.temp(context_mut_ref_ty, source_info.span);
         this.cfg.push(block, Statement::new(source_info, StatementKind::StorageLive(cx.local)));
-        this.schedule_drop_value(source_info.span, this.local_scope(), cx.local);
+        this.schedule_drop_storage_value(source_info.span, this.local_scope(), cx.local);
 
         let resume_ty_arg = Place::from(Local::arg(1));
 
@@ -1101,7 +1100,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         let poll_place = this.temp(poll_ty, source_info.span);
         this.cfg
             .push(block, Statement::new(source_info, StatementKind::StorageLive(poll_place.local)));
-        this.schedule_drop_value(source_info.span, this.local_scope(), poll_place.local);
+        this.schedule_drop_storage_value(source_info.span, this.local_scope(), poll_place.local);
 
         let target = this.cfg.start_new_block();
         this.cfg.terminate(
@@ -1140,7 +1139,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             discriminant_place,
             Rvalue::Discriminant(poll_place),
         );
-        this.schedule_drop_value(source_info.span, this.local_scope(), discriminant_place.local);
+        this.schedule_drop_storage(source_info.span, this.local_scope(), discriminant_place.local);
 
         let ready_block = this.cfg.start_new_block();
         let mut pending_block = this.cfg.start_new_block();
