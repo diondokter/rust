@@ -5,7 +5,7 @@ LL | async fn recursive_async_function() -> () {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 LL |
 LL |     recursive_async_function().await;
-   |     -------------------------------- recursive call here
+   |                                ----- recursive call here
    |
    = note: a recursive `async fn` call must introduce indirection such as `Box::pin` to avoid an infinitely sized future
 

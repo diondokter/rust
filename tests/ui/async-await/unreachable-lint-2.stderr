@@ -2,7 +2,7 @@ error: unreachable statement
   --> $DIR/unreachable-lint-2.rs:7:5
    |
 LL |     endless().await;
-   |               ----- any code following this expression is unreachable
+   |     --------------- any code following this expression is unreachable
 LL |     println!("this is unreachable!");
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
    |
